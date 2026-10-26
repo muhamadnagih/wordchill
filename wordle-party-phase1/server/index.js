@@ -25,8 +25,16 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // In-memory scoreboards for daily & challenge sharing (Serverless friendly cache)
 const dailyScores = new Map(); // key: "day-LANG-LEN" -> Array of { name, score, solved, time, avatar }
-// Track which Discord user IDs have already submitted daily scores (prevent replay)
-const dailySubmissions = new Map(); // key: "day-LANG-userId" -> true
+// Track which individual players have already submitted daily scores (prevent replay, per-player scoped)
+const dailySubmissions = new Map(); // key: "day-LANG-playerIdentity" -> true
+
+// In-memory cache for resolved avatar Base64 data URIs
+const avatarDataUriCache = new Map();
+
+// Default fallback channels/webhooks for players lacking explicit client-side config
+let lastActiveWebhook = process.env.DISCORD_WEBHOOK_URL || '';
+let lastActiveChannelId = process.env.DISCORD_CHANNEL_ID || '';
+let lastActiveGuildId = process.env.DISCORD_GUILD_ID || '';
 
 // دوال مساعدة لجعل اللعب الفردي Stateless تماماً على Vercel
 function signSoloToken(payload) {
@@ -322,42 +330,152 @@ app.post('/api/discord/token', async (req, res) => {
   }
 });
 
-// ==================== AVATAR PROXY (BYPASS CORS/CSP FOR CANVAS) ====================
+// ==================== DISCORD AVATAR RESOLVER & PROXY ====================
+function isAllowedAvatarDomain(urlStr) {
+  try {
+    const parsed = new URL(urlStr);
+    const host = parsed.hostname.toLowerCase();
+    const isDiscord = host.endsWith('discord.com') ||
+                      host.endsWith('discordapp.com') ||
+                      host.endsWith('discordapp.net') ||
+                      host.endsWith('discord.media') ||
+                      host.endsWith('discord.gg');
+    return isDiscord || host.endsWith('githubusercontent.com') || host.endsWith('imgur.com');
+  } catch (e) {
+    return false;
+  }
+}
+
+async function resolveAvatarDataUri({ avatarUrl, userId, avatarHash, playerName, guildId }) {
+  const cacheKey = (avatarUrl && typeof avatarUrl === 'string')
+    ? avatarUrl
+    : (userId ? `user_${userId}` : (playerName ? `name_${playerName}_${guildId || ''}` : null));
+
+  if (cacheKey && avatarDataUriCache.has(cacheKey)) {
+    return { ok: true, dataUri: avatarDataUriCache.get(cacheKey) };
+  }
+
+  let targetCdnUrl = null;
+
+  // a) Full avatarUrl provided
+  if (avatarUrl && typeof avatarUrl === 'string' && avatarUrl.trim()) {
+    const trimmed = avatarUrl.trim();
+    if (trimmed.startsWith('data:')) {
+      if (cacheKey) avatarDataUriCache.set(cacheKey, trimmed);
+      return { ok: true, dataUri: trimmed };
+    }
+    if (!isAllowedAvatarDomain(trimmed)) {
+      return { ok: false, status: 403, error: 'Unsupported avatar domain' };
+    }
+    targetCdnUrl = trimmed;
+  }
+  // a2) userId + avatarHash provided
+  else if (userId && avatarHash) {
+    targetCdnUrl = `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.png?size=256`;
+  }
+  // b) Only userId provided -> query Discord REST API using Bot Token
+  else if (userId && process.env.DISCORD_BOT_TOKEN) {
+    try {
+      const uRes = await fetch(`https://discord.com/api/v10/users/${userId}`, {
+        headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
+      });
+      if (uRes.ok) {
+        const uData = await uRes.json();
+        if (uData.avatar) {
+          targetCdnUrl = `https://cdn.discordapp.com/avatars/${uData.id}/${uData.avatar}.png?size=256`;
+        } else {
+          const defaultAvatarNum = (BigInt(uData.id || 0) >> 22n) % 6n;
+          targetCdnUrl = `https://cdn.discordapp.com/embed/avatars/${defaultAvatarNum}.png`;
+        }
+      }
+    } catch (e) {
+      console.warn('Discord Bot API user lookup note:', e.message);
+    }
+  }
+
+  // c) CRITICAL FALLBACK: If userId missing/empty, but playerName is available
+  if (!targetCdnUrl && playerName && process.env.DISCORD_BOT_TOKEN) {
+    const targetGuildId = guildId || process.env.DISCORD_GUILD_ID || lastActiveGuildId;
+    if (targetGuildId) {
+      try {
+        const searchUrl = `https://discord.com/api/v10/guilds/${targetGuildId}/members/search?query=${encodeURIComponent(playerName)}&limit=1`;
+        const mRes = await fetch(searchUrl, {
+          headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
+        });
+        if (mRes.ok) {
+          const members = await mRes.json();
+          if (Array.isArray(members) && members.length > 0) {
+            const m = members[0];
+            const u = m.user;
+            const aHash = m.avatar || u?.avatar;
+            if (u && aHash) {
+              if (m.avatar) {
+                targetCdnUrl = `https://cdn.discordapp.com/guilds/${targetGuildId}/users/${u.id}/avatars/${m.avatar}.png?size=256`;
+              } else {
+                targetCdnUrl = `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=256`;
+              }
+            } else if (u) {
+              const defaultAvatarNum = (BigInt(u.id || 0) >> 22n) % 6n;
+              targetCdnUrl = `https://cdn.discordapp.com/embed/avatars/${defaultAvatarNum}.png`;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Discord Bot API member search note:', e.message);
+      }
+    }
+  }
+
+  // Convert target CDN image to Base64 Data URL
+  if (targetCdnUrl) {
+    try {
+      const imgRes = await fetch(targetCdnUrl);
+      if (!imgRes.ok) {
+        return { ok: false, status: 404, error: 'Avatar not found' };
+      }
+      const contentType = imgRes.headers.get('content-type') || 'image/png';
+      if (!contentType.startsWith('image/')) {
+        return { ok: false, status: 400, error: 'URL did not return an image' };
+      }
+      const arrayBuffer = await imgRes.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+      const dataUri = `data:${contentType};base64,${base64}`;
+      if (cacheKey) avatarDataUriCache.set(cacheKey, dataUri);
+      return { ok: true, dataUri };
+    } catch (e) {
+      return { ok: false, status: 500, error: e.message };
+    }
+  }
+
+  return { ok: false, dataUri: null };
+}
+
+// REST endpoint for resolving avatars via Discord Bot API / CDN / Member search
+app.get('/api/discord-avatar', async (req, res) => {
+  try {
+    const { avatarUrl, userId, avatarHash, playerName, guildId } = req.query;
+    const result = await resolveAvatarDataUri({ avatarUrl, userId, avatarHash, playerName, guildId });
+    if (result.ok) {
+      return res.json({ ok: true, dataUri: result.dataUri });
+    }
+    return res.status(result.status || 200).json({ ok: false, dataUri: null, error: result.error });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Backward-compatible avatar proxy endpoint
 app.get('/api/avatar-proxy', async (req, res) => {
   try {
     const { url } = req.query;
     if (!url || typeof url !== 'string') {
       return res.status(400).json({ ok: false, error: 'Missing url parameter' });
     }
-    // Only allow Discord CDN URLs for security
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-    const isDiscordDomain = host.endsWith('discord.com') ||
-                            host.endsWith('discordapp.com') ||
-                            host.endsWith('discordapp.net') ||
-                            host.endsWith('discord.media') ||
-                            host.endsWith('discord.gg');
-
-    if (!isDiscordDomain && !host.endsWith('githubusercontent.com') && !host.endsWith('imgur.com')) {
-      return res.status(403).json({ ok: false, error: 'Unsupported avatar domain' });
+    const result = await resolveAvatarDataUri({ avatarUrl: url });
+    if (result.ok && result.dataUri) {
+      return res.json({ ok: true, dataUri: result.dataUri });
     }
-
-    const imgRes = await fetch(url);
-    if (!imgRes.ok) {
-      return res.status(404).json({ ok: false, error: 'Avatar not found' });
-    }
-
-    const contentType = imgRes.headers.get('content-type') || 'image/png';
-    if (!contentType.startsWith('image/')) {
-      return res.status(400).json({ ok: false, error: 'URL did not return an image' });
-    }
-    const arrayBuffer = await imgRes.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-
-    res.json({
-      ok: true,
-      dataUri: `data:${contentType};base64,${base64}`
-    });
+    return res.status(result.status || 404).json({ ok: false, error: result.error || 'Avatar not found' });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -368,6 +486,8 @@ app.post('/api/discord/share', async (req, res) => {
   try {
     const {
       webhookUrl,
+      channelId,
+      guildId,
       playerName,
       avatarUrl,
       lang,
@@ -380,12 +500,26 @@ app.post('/api/discord/share', async (req, res) => {
       isDaily,
       challengeInfo,
       wordLength,
-      discordUserId
+      discordUserId,
+      clientId
     } = req.body || {};
 
-    // ===== DAILY CHALLENGE DUPLICATE PROTECTION =====
-    const dedupKey = (isDaily && dayNumber && discordUserId)
-      ? `${dayNumber}_${lang || 'en'}_${discordUserId}`
+    // 1. Scoped, distinct player identification
+    const cleanDiscordId = (discordUserId && typeof discordUserId === 'string' && discordUserId !== 'null' && discordUserId !== 'undefined' && !discordUserId.startsWith('guest'))
+      ? discordUserId.replace(/^discord_/, '')
+      : null;
+    const cleanPlayerName = (playerName && typeof playerName === 'string' && playerName.trim())
+      ? playerName.trim().toLowerCase().replace(/\s+/g, '_')
+      : null;
+    const cleanClientId = (clientId && typeof clientId === 'string' && clientId.trim())
+      ? clientId.trim()
+      : null;
+
+    const playerIdentity = cleanDiscordId || cleanPlayerName || cleanClientId || req.ip;
+
+    // ===== DAILY CHALLENGE DUPLICATE PROTECTION (Scoped Per-Player) =====
+    const dedupKey = (isDaily && dayNumber && playerIdentity)
+      ? `${dayNumber}_${lang || 'en'}_${playerIdentity}`
       : null;
 
     if (dedupKey && dailySubmissions.has(dedupKey)) {
@@ -396,9 +530,25 @@ app.post('/api/discord/share', async (req, res) => {
       });
     }
 
-    const targetWebhook = (webhookUrl || process.env.DISCORD_WEBHOOK_URL || '').trim();
-    if (!targetWebhook.startsWith('https://discord.com/api/webhooks/')) {
-      return res.status(400).json({ ok: false, error: 'يرجى وضع رابط Discord Webhook صحيح أولاً!' });
+    // 2. Fallback resolution for Webhook, Channel ID, and Guild ID
+    if (webhookUrl && webhookUrl.startsWith('https://discord.com/api/webhooks/')) {
+      lastActiveWebhook = webhookUrl;
+    }
+    if (channelId) lastActiveChannelId = channelId;
+    if (guildId) lastActiveGuildId = guildId;
+
+    const targetWebhook = (webhookUrl || process.env.DISCORD_WEBHOOK_URL || lastActiveWebhook || '').trim();
+    const targetChannelId = (channelId || process.env.DISCORD_CHANNEL_ID || lastActiveChannelId || '').trim();
+    const targetGuildId = (guildId || process.env.DISCORD_GUILD_ID || lastActiveGuildId || '').trim();
+
+    const canSendViaWebhook = targetWebhook.startsWith('https://discord.com/api/webhooks/');
+    const canSendViaBot = Boolean(!canSendViaWebhook && targetChannelId && process.env.DISCORD_BOT_TOKEN);
+
+    if (!canSendViaWebhook && !canSendViaBot) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No valid Discord Webhook or Channel configured'
+      });
     }
 
     if (dedupKey) {
@@ -411,7 +561,7 @@ app.post('/api/discord/share', async (req, res) => {
     const langLabel = lang === 'ar' ? 'عربي 🇪🇬' : 'EN 🇬🇧';
     const dayLabel = dayNumber ? `WordChill No. ${dayNumber}` : 'WordChill Challenge';
 
-    // Store in scoreboard cache
+    // Store in scoreboard cache (Leaderboard)
     const scoreKey = `${dayNumber || 'custom'}_${lang || 'en'}_${wordLength || 5}`;
     if (!dailyScores.has(scoreKey)) {
       dailyScores.set(scoreKey, []);
@@ -487,6 +637,14 @@ app.post('/api/discord/share', async (req, res) => {
       ]
     };
 
+    const targetUrl = canSendViaWebhook
+      ? targetWebhook + '?wait=true'
+      : `https://discord.com/api/v10/channels/${targetChannelId}/messages`;
+
+    const headers = canSendViaBot
+      ? { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
+      : {};
+
     let discordRes;
     if (imageBase64) {
       const base64Data = imageBase64.replace(/^data:image\/png;base64,/, '');
@@ -497,21 +655,27 @@ app.post('/api/discord/share', async (req, res) => {
       formData.append('payload_json', JSON.stringify(payloadJson));
       formData.append('files[0]', new Blob([imageBuffer], { type: 'image/png' }), 'wordchill-card.png');
 
-      discordRes = await fetch(targetWebhook + '?wait=true', {
+      discordRes = await fetch(targetUrl, {
         method: 'POST',
+        headers,
         body: formData
       });
     } else {
-      discordRes = await fetch(targetWebhook + '?wait=true', {
+      discordRes = await fetch(targetUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify(payloadJson)
       });
     }
 
     if (!discordRes.ok) {
       const errText = await discordRes.text().catch(() => '');
-      return res.status(400).json({ ok: false, error: 'تعذر الإرسال إلى ديسكورد، تأكد من صحة رابط الـ Webhook', detail: errText });
+      return res.status(400).json({ ok: false, error: 'تعذر الإرسال إلى ديسكورد', detail: errText });
+    }
+
+    // Mark successful submission in dedup cache
+    if (dedupKey) {
+      dailySubmissions.set(dedupKey, true);
     }
 
     res.json({ ok: true, leaderboard: list });

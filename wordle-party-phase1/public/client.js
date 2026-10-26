@@ -56,6 +56,15 @@
   nameInput.value = localStorage.getItem('lexirush_player_name') || `Player_${playerId.slice(2, 6).toUpperCase()}`;
   nameInput.addEventListener('change', () => {
     localStorage.setItem('lexirush_player_name', nameInput.value.trim() || 'Player');
+    if (typeof updateDailyButtonState === 'function') {
+      updateDailyButtonState();
+    }
+  });
+  nameInput.addEventListener('input', () => {
+    localStorage.setItem('lexirush_player_name', nameInput.value.trim() || 'Player');
+    if (typeof updateDailyButtonState === 'function') {
+      updateDailyButtonState();
+    }
   });
 
   function updateAvatarDisplay(url) {
@@ -97,22 +106,42 @@
   };
 
   // ==================== DAILY CHALLENGE PERSISTENCE ====================
-  function getEffectiveUserId() {
-    // Prefer Discord user ID if authenticated, else persistent guest ID
-    const storedId = localStorage.getItem('lexirush_player_id') || '';
-    if (storedId.startsWith('discord_')) return storedId;
-    // Ensure a stable guest ID exists
-    let guestId = localStorage.getItem('wordchill_guest_id');
-    if (!guestId) {
-      guestId = 'guest_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
-      localStorage.setItem('wordchill_guest_id', guestId);
+  function getClientId() {
+    let cid = localStorage.getItem('wordchill_client_id');
+    if (!cid) {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        cid = crypto.randomUUID();
+      } else {
+        cid = 'client_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+      }
+      localStorage.setItem('wordchill_client_id', cid);
     }
-    return guestId;
+    return cid;
+  }
+
+  function getEffectiveUserId() {
+    const rawDiscordId = discordAuth?.user?.id || (localStorage.getItem('lexirush_player_id') || '').replace(/^discord_/, '');
+    if (rawDiscordId && rawDiscordId !== 'null' && rawDiscordId !== 'undefined' && !rawDiscordId.startsWith('guest')) {
+      return `discord_${rawDiscordId}`;
+    }
+    return getClientId();
+  }
+
+  function getEffectivePlayerIdentifier() {
+    const rawDiscordId = discordAuth?.user?.id || (localStorage.getItem('lexirush_player_id') || '').replace(/^discord_/, '');
+    if (rawDiscordId && rawDiscordId !== 'null' && rawDiscordId !== 'undefined' && !rawDiscordId.startsWith('guest')) {
+      return rawDiscordId;
+    }
+    const pName = (document.getElementById('globalPlayerName')?.value || localStorage.getItem('lexirush_player_name') || '').trim();
+    if (pName && pName.toLowerCase() !== 'player') {
+      return pName.toLowerCase().replace(/\s+/g, '_');
+    }
+    return getClientId();
   }
 
   function getDailyStateKey(dayNumber, lang) {
-    const uid = getEffectiveUserId();
-    return `wordchill_daily_${dayNumber}_${lang}_${uid}`;
+    const playerKey = getEffectivePlayerIdentifier();
+    return `wordchill_daily_${dayNumber}_${lang}_${playerKey}`;
   }
 
   function saveDailyProgress(dayNumber, lang, sessionData) {
@@ -1187,24 +1216,35 @@
   });
 
   // ==================== CANVAS RESULT CARD GENERATOR ====================
-  // Fetch avatar via backend proxy to bypass CORS/CSP
-  async function fetchAvatarViaProxy(url) {
-    if (!url) return null;
-    // If already a data URI, return as-is
-    if (url.startsWith('data:')) return url;
-    // Use cached version if available
-    if (state.cachedAvatarDataUri) return state.cachedAvatarDataUri;
+  // Resolve avatar via backend endpoint (/api/discord-avatar) supporting Bot API & CDN
+  async function resolveDiscordAvatar({ avatarUrl, userId, playerName, guildId } = {}) {
+    if (avatarUrl && avatarUrl.startsWith('data:')) return avatarUrl;
+
+    const cacheKey = avatarUrl || userId || playerName;
+    if (cacheKey && state.cachedAvatarDataUri) return state.cachedAvatarDataUri;
+
     try {
-      const res = await fetch(`/api/avatar-proxy?url=${encodeURIComponent(url)}`);
+      const q = new URLSearchParams();
+      if (avatarUrl) q.set('avatarUrl', avatarUrl);
+      if (userId && !userId.startsWith('guest')) q.set('userId', userId);
+      if (playerName) q.set('playerName', playerName);
+      if (guildId) q.set('guildId', guildId);
+
+      const res = await fetch(`/api/discord-avatar?${q.toString()}`);
       const data = await res.json();
       if (data.ok && data.dataUri) {
         state.cachedAvatarDataUri = data.dataUri;
         return data.dataUri;
       }
     } catch (e) {
-      console.warn('Avatar proxy fetch failed:', e);
+      console.warn('Avatar resolution note:', e);
     }
-    return null;
+    return state.cachedAvatarDataUri || null;
+  }
+
+  // Backward-compatible avatar proxy helper
+  async function fetchAvatarViaProxy(url) {
+    return resolveDiscordAvatar({ avatarUrl: url });
   }
 
   function loadAvatarImg(url) {
@@ -1338,9 +1378,22 @@
     const solved = myStatus === 'WON';
     const pName = nameInput.value.trim() || 'Player';
 
-    // Resolve avatar via proxy for canvas
+    // 1. Resolve avatar from backend via Discord Bot API / CDN / Member search
     const rawAvatarUrl = localStorage.getItem('wordchill_discord_avatar') || '';
-    const proxiedAvatar = await fetchAvatarViaProxy(rawAvatarUrl);
+    const rawDiscordId = discordAuth?.user?.id || (localStorage.getItem('lexirush_player_id') || '').replace(/^discord_/, '');
+    const cleanDiscordId = (rawDiscordId && rawDiscordId !== 'null' && rawDiscordId !== 'undefined' && !rawDiscordId.startsWith('guest'))
+      ? rawDiscordId
+      : null;
+    const gId = discordSdk?.guildId || null;
+
+    const proxiedAvatar = await resolveDiscordAvatar({
+      avatarUrl: rawAvatarUrl,
+      userId: cleanDiscordId,
+      playerName: pName,
+      guildId: gId
+    });
+
+    state.lastCardAvatarUrl = proxiedAvatar;
 
     const dataUrl = await generateDiscordResultCard({
       guesses,
@@ -1361,10 +1414,8 @@
     }
     if (loadingEl) loadingEl.style.display = 'none';
 
-    const webhook = localStorage.getItem('wordchill_discord_webhook');
-    if (webhook) {
-      shareResultToDiscord({ autoSend: true });
-    }
+    // ALWAYS call shareResultToDiscord for every player when Daily Challenge completes
+    shareResultToDiscord({ autoSend: true });
   }
 
   async function displayMpDiscordCardPreview(room) {
@@ -1373,9 +1424,21 @@
     const solved = myPlayer?.status === 'SOLVED';
     const pName = nameInput.value.trim() || 'Player';
 
-    // Resolve avatar via proxy for canvas
     const rawAvatarUrl = localStorage.getItem('wordchill_discord_avatar') || '';
-    const proxiedAvatar = await fetchAvatarViaProxy(rawAvatarUrl);
+    const rawDiscordId = discordAuth?.user?.id || (localStorage.getItem('lexirush_player_id') || '').replace(/^discord_/, '');
+    const cleanDiscordId = (rawDiscordId && rawDiscordId !== 'null' && rawDiscordId !== 'undefined' && !rawDiscordId.startsWith('guest'))
+      ? rawDiscordId
+      : null;
+    const gId = discordSdk?.guildId || null;
+
+    const proxiedAvatar = await resolveDiscordAvatar({
+      avatarUrl: rawAvatarUrl,
+      userId: cleanDiscordId,
+      playerName: pName,
+      guildId: gId
+    });
+
+    state.lastCardAvatarUrl = proxiedAvatar;
 
     const dataUrl = await generateDiscordResultCard({
       guesses,
@@ -1413,10 +1476,19 @@
       document.getElementById('discordModal')?.classList.remove('hidden');
       return showToast('الرجاء وضع رابط Discord Webhook أولاً من الإعدادات!');
     }
-    if (!webhookUrl && autoSend) return;
+
+    const rawDiscordId = discordAuth?.user?.id || (localStorage.getItem('lexirush_player_id') || '').replace(/^discord_/, '');
+    const cleanDiscordId = (rawDiscordId && rawDiscordId !== 'null' && rawDiscordId !== 'undefined' && !rawDiscordId.startsWith('guest'))
+      ? rawDiscordId
+      : null;
+    const cid = getClientId();
+    const chId = discordSdk?.channelId || null;
+    const gId = discordSdk?.guildId || null;
 
     try {
-      showToast('جاري إرسال الكارت إلى ديسكورد... 🚀');
+      if (!autoSend) {
+        showToast('جاري إرسال الكارت إلى ديسكورد... 🚀');
+      }
       const gameUrl = state.lastChallengeToken
         ? `${window.location.origin}${window.location.pathname}?challenge=${state.lastChallengeToken}`
         : (state.soloSession?.isDaily ? `${window.location.origin}${window.location.pathname}?daily=1` : window.location.origin);
@@ -1426,8 +1498,10 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           webhookUrl,
+          channelId: chId,
+          guildId: gId,
           playerName: pName,
-          avatarUrl: localStorage.getItem('wordchill_discord_avatar') || '',
+          avatarUrl: state.lastCardAvatarUrl || localStorage.getItem('wordchill_discord_avatar') || '',
           lang: state.lang,
           attemptsUsed: guesses.length,
           maxAttempts: state.maxAttempts,
@@ -1438,18 +1512,21 @@
           isDaily: Boolean(state.soloSession?.isDaily || state.soloSession?.dayNumber),
           challengeInfo: state.soloSession?.challenger || null,
           wordLength: state.wordLength,
-          discordUserId: getEffectiveUserId()
+          discordUserId: cleanDiscordId,
+          clientId: cid
         })
       });
 
       const data = await res.json();
       if (data.ok) {
-        showToast('تم نشر النتيجة في روم ديسكورد بنجاح! 🎮🔥');
+        if (!autoSend) showToast('تم نشر النتيجة في روم ديسكورد بنجاح! 🎮🔥');
       } else {
-        showToast(data.error || 'تعذر الإرسال لديسكورد');
+        if (!autoSend && !data.alreadySubmitted) {
+          showToast(data.error || 'تعذر الإرسال لديسكورد');
+        }
       }
     } catch (err) {
-      showToast('خطأ في الاتصال أثناء الإرسال');
+      if (!autoSend) showToast('خطأ في الاتصال أثناء الإرسال');
     }
   }
 

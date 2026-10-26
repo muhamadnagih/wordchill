@@ -175,3 +175,85 @@ test('POST /api/discord/share enforces single daily submission per user per day 
   }
 });
 
+test('POST /api/discord/share allows distinct players to submit on the same day without blocking each other', async () => {
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const playerA = {
+      webhookUrl: 'https://discord.com/api/webhooks/12345/mock-webhook-token',
+      playerName: 'PlayerA',
+      isDaily: true,
+      dayNumber: 8888,
+      lang: 'en',
+      clientId: 'uuid_client_aaa',
+      attemptsUsed: 2,
+      maxAttempts: 6,
+      solved: true
+    };
+
+    const playerB = {
+      webhookUrl: 'https://discord.com/api/webhooks/12345/mock-webhook-token',
+      playerName: 'PlayerB',
+      isDaily: true,
+      dayNumber: 8888,
+      lang: 'en',
+      clientId: 'uuid_client_bbb',
+      attemptsUsed: 4,
+      maxAttempts: 6,
+      solved: true
+    };
+
+    // Player A submits
+    const resA1 = await fetch(`http://localhost:${port}/api/discord/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(playerA)
+    });
+    // Not 409
+    assert.notEqual(resA1.status, 409);
+
+    // Player B submits on SAME day and lang -> must NOT be blocked (not 409)
+    const resB1 = await fetch(`http://localhost:${port}/api/discord/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(playerB)
+    });
+    assert.notEqual(resB1.status, 409);
+
+    // Player A submits AGAIN -> rejected with 409
+    const resA2 = await fetch(`http://localhost:${port}/api/discord/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(playerA)
+    });
+    assert.equal(resA2.status, 409);
+    const dataA2 = await resA2.json();
+    assert.equal(dataA2.alreadySubmitted, true);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/discord-avatar returns base64 dataUri for valid avatar inputs', async () => {
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    // 1. Data URI returns directly
+    const mockDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const res1 = await fetch(`http://localhost:${port}/api/discord-avatar?avatarUrl=${encodeURIComponent(mockDataUri)}`);
+    assert.equal(res1.status, 200);
+    const data1 = await res1.json();
+    assert.equal(data1.ok, true);
+    assert.equal(data1.dataUri, mockDataUri);
+
+    // 2. Unsupported domain returns 403
+    const res2 = await fetch(`http://localhost:${port}/api/discord-avatar?avatarUrl=https://unauthorized-domain.com/pic.png`);
+    assert.equal(res2.status, 403);
+  } finally {
+    server.close();
+  }
+});
+
+

@@ -17,3 +17,7 @@ Thumbs.db
 # Environment files
 .env
 .env.*
+
+# Local directory junctions / symlinks
+wordchill
+wordchill/
