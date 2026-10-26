@@ -126,14 +126,17 @@ baseDirs.forEach(targetDir => {
     const serverCode = fs.readFileSync(serverFile, 'utf8');
     const hasAvatarResolver = serverCode.includes('/api/discord-avatar');
     const hasScopedDedup = serverCode.includes('playerIdentity');
-    console.log(`  -> server/index.js: avatarResolver=${hasAvatarResolver}, scopedDedup=${hasScopedDedup}`);
+    const hasInteractions = serverCode.includes('/api/interactions');
+    const hasRegisterCommands = serverCode.includes('registerDiscordCommands');
+    console.log(`  -> server/index.js: avatarResolver=${hasAvatarResolver}, scopedDedup=${hasScopedDedup}, interactions=${hasInteractions}, registerCmds=${hasRegisterCommands}`);
   }
 
   if (fs.existsSync(clientFile)) {
     const clientCode = fs.readFileSync(clientFile, 'utf8');
     const hasClientId = clientCode.includes('getClientId');
     const hasResolveAvatar = clientCode.includes('resolveDiscordAvatar');
-    console.log(`  -> public/client.js: getClientId=${hasClientId}, resolveDiscordAvatar=${hasResolveAvatar}`);
+    const hasPromptReady = clientCode.includes('discordSdk.ready()');
+    console.log(`  -> public/client.js: getClientId=${hasClientId}, resolveAvatar=${hasResolveAvatar}, promptReady=${hasPromptReady}`);
   }
 });
 

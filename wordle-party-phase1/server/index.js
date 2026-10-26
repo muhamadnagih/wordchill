@@ -287,7 +287,9 @@ app.post('/api/mp/leave', (req, res) => {
 });
 
 // ==================== DISCORD ACTIVITY & EMBEDDED SDK ENDPOINTS ====================
-app.post('/api/discord/token', async (req, res) => {
+const { registerDiscordCommands } = require('../scripts/register-commands');
+
+const handleTokenExchange = async (req, res) => {
   try {
     const { code } = req.body || {};
     if (!code) return res.status(400).json({ ok: false, error: 'Authorization code is required' });
@@ -325,6 +327,116 @@ app.post('/api/discord/token', async (req, res) => {
     }
 
     res.json({ ok: true, access_token: tokenData.access_token });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+};
+
+app.post('/api/token', handleTokenExchange);
+app.post('/api/discord/token', handleTokenExchange);
+
+// ==================== DISCORD INTERACTIONS (SLASH COMMANDS & PING) ====================
+function verifyDiscordSignature(req) {
+  const publicKey = process.env.DISCORD_PUBLIC_KEY;
+  if (!publicKey) return true; // dev bypass if not configured
+  const signature = req.headers['x-signature-ed25519'];
+  const timestamp = req.headers['x-signature-timestamp'];
+  if (!signature || !timestamp) return false;
+  try {
+    const rawBody = req.rawBody || JSON.stringify(req.body);
+    const message = Buffer.concat([Buffer.from(timestamp, 'utf-8'), Buffer.from(rawBody, 'utf-8')]);
+    const key = Buffer.concat([
+      Buffer.from('302a300506032b6570032100', 'hex'),
+      Buffer.from(publicKey, 'hex')
+    ]);
+    return crypto.verify(null, message, { key, format: 'der', type: 'spki' }, Buffer.from(signature, 'hex'));
+  } catch (e) {
+    return false;
+  }
+}
+
+const handleInteraction = (req, res) => {
+  if (!verifyDiscordSignature(req)) {
+    return res.status(401).send('invalid request signature');
+  }
+
+  const interaction = req.body || {};
+
+  // Type 1: PING (Discord endpoint verification handshake)
+  if (interaction.type === 1) {
+    return res.json({ type: 1 });
+  }
+
+  // Type 2: APPLICATION_COMMAND (Slash Commands: /wordchill, /launch)
+  if (interaction.type === 2) {
+    const cmdName = interaction.data?.name;
+    const clientId = process.env.DISCORD_CLIENT_ID || '1562771601764651109';
+    const activityLaunchUrl = `https://discord.com/activities/${clientId}`;
+    const webAppUrl = 'https://wordchill.vercel.app';
+
+    if (cmdName === 'wordchill' || cmdName === 'launch') {
+      return res.json({
+        type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
+        data: {
+          content: '🎮 **WordChill — Daily Word Challenge & Multiplayer Party**\nPlay today\'s secret word or challenge server members directly inside Discord!',
+          components: [
+            {
+              type: 1, // ACTION_ROW
+              components: [
+                {
+                  type: 2, // BUTTON
+                  style: 5, // LINK
+                  label: 'Launch WordChill 🎮',
+                  url: activityLaunchUrl
+                },
+                {
+                  type: 2, // BUTTON
+                  style: 5, // LINK
+                  label: 'Play in Browser 🌐',
+                  url: webAppUrl
+                }
+              ]
+            }
+          ]
+        }
+      });
+    }
+
+    return res.json({
+      type: 4,
+      data: { content: '🎮 WordChill Activity is ready to play!' }
+    });
+  }
+
+  return res.json({ type: 1 });
+};
+
+app.post('/api/interactions', handleInteraction);
+app.post('/api/discord/interactions', handleInteraction);
+
+// Trigger command registration over HTTP
+app.post('/api/discord/register-commands', async (req, res) => {
+  try {
+    const result = await registerDiscordCommands(req.body || {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// View registered commands via Bot API
+app.get('/api/discord/commands', async (req, res) => {
+  try {
+    const clientId = process.env.DISCORD_CLIENT_ID || '1562771601764651109';
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+    if (!botToken) {
+      return res.json({ ok: false, error: 'DISCORD_BOT_TOKEN not configured in environment' });
+    }
+    const r = await fetch(`https://discord.com/api/v10/applications/${clientId}/commands`, {
+      headers: { Authorization: `Bot ${botToken}` }
+    });
+    const commands = await r.json();
+    res.json({ ok: r.ok, status: r.status, commands });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -688,6 +800,9 @@ if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`🚀 WordChill Server (Vercel-Ready) running on http://localhost:${PORT}`);
+    if (process.env.DISCORD_BOT_TOKEN) {
+      registerDiscordCommands().catch(err => console.warn('Startup command registration note:', err.message));
+    }
   });
 }
 

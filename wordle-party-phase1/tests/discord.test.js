@@ -256,4 +256,55 @@ test('GET /api/discord-avatar returns base64 dataUri for valid avatar inputs', a
   }
 });
 
+test('POST /api/token exchanges code successfully (matching /api/discord/token)', async () => {
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const res = await fetch(`http://localhost:${port}/api/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'valid_test_code' })
+    });
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.ok(data.access_token);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/interactions handles PING (Type 1) and /wordchill (Type 2)', async () => {
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    // 1. PING handshake
+    const pingRes = await fetch(`http://localhost:${port}/api/interactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 1 })
+    });
+    const pingData = await pingRes.json();
+    assert.equal(pingData.type, 1);
+
+    // 2. /wordchill command invocation
+    const cmdRes = await fetch(`http://localhost:${port}/api/interactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 2,
+        data: { name: 'wordchill' }
+      })
+    });
+    const cmdData = await cmdRes.json();
+    assert.equal(cmdData.type, 4); // CHANNEL_MESSAGE_WITH_SOURCE
+    assert.ok(cmdData.data.content.includes('WordChill'));
+    assert.ok(cmdData.data.components[0].components.some(btn => btn.url.includes('activities')));
+  } finally {
+    server.close();
+  }
+});
+
+
 

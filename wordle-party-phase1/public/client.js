@@ -1102,7 +1102,7 @@
 
   async function initDiscordSdk() {
     const urlParams = new URLSearchParams(window.location.search);
-    const isEmbedded = urlParams.has('frame_id') || window.parent !== window;
+    const isDiscordActivity = urlParams.has('frame_id');
 
     const dotEl = document.getElementById('discordStatusDot');
     const titleEl = document.getElementById('discordStatusTitle');
@@ -1111,37 +1111,77 @@
     const savedAvatar = localStorage.getItem('wordchill_discord_avatar');
     if (savedAvatar) updateAvatarDisplay(savedAvatar);
 
+    if (!isDiscordActivity) {
+      if (dotEl) dotEl.style.background = '#38BDF8';
+      if (titleEl) titleEl.textContent = 'Standalone Web Mode (Webhooks Ready)';
+      if (descEl) descEl.textContent = 'Running in browser. You can link your Discord server channel via Webhook.';
+      return;
+    }
+
     try {
+      if (dotEl) dotEl.style.background = '#F59E0B';
+      if (titleEl) titleEl.textContent = 'Connecting to Discord Activity... ⏳';
+
       const sdkModule = await import('https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@2.5.0/output/index.mjs')
         .catch(() => null);
 
-      if (sdkModule && isEmbedded) {
+      if (sdkModule) {
         const clientId = '1562771601764651109';
         discordSdk = new sdkModule.DiscordSDK(clientId);
+
+        // 1. PROMPTLY signal ready() to prevent App Launcher hanging
         await discordSdk.ready();
 
+        // 2. Persist active channel & guild IDs immediately from SDK
+        if (discordSdk.channelId) {
+          localStorage.setItem('wordchill_discord_channel_id', discordSdk.channelId);
+        }
+        if (discordSdk.guildId) {
+          localStorage.setItem('wordchill_discord_guild_id', discordSdk.guildId);
+        }
+
+        // 3. OAuth2 Authorize & Authenticate flow
         const { code } = await discordSdk.commands.authorize({
           client_id: clientId,
           response_type: 'code',
           state: '',
           prompt: 'none',
-          scope: ['identify', 'guilds']
-        }).catch(() => ({ code: null }));
+          scope: ['identify', 'guilds', 'guilds.members.read']
+        }).catch((err) => {
+          console.warn('Discord authorize note:', err);
+          return { code: null };
+        });
 
         if (code) {
-          const tokenRes = await fetch('/api/discord/token', {
+          // Supports both /api/token and /api/discord/token routes
+          let tokenRes = await fetch('/api/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ code })
-          });
-          const tokenData = await tokenRes.json();
-          if (tokenData.ok && tokenData.access_token) {
-            discordAuth = await discordSdk.commands.authenticate({
-              access_token: tokenData.access_token
+          }).catch(() => null);
+
+          if (!tokenRes || !tokenRes.ok) {
+            tokenRes = await fetch('/api/discord/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ code })
             }).catch(() => null);
+          }
+
+          if (tokenRes && tokenRes.ok) {
+            const tokenData = await tokenRes.json();
+            if (tokenData.ok && tokenData.access_token) {
+              discordAuth = await discordSdk.commands.authenticate({
+                access_token: tokenData.access_token
+              }).catch((err) => {
+                console.warn('Discord authenticate note:', err);
+                return null;
+              });
+            }
           }
         }
 
+        // 4. Update player profile from authenticated user
         if (discordAuth?.user) {
           const u = discordAuth.user;
           const dName = u.global_name || u.username;
@@ -1159,16 +1199,15 @@
 
         if (dotEl) dotEl.style.background = '#10B981';
         if (titleEl) titleEl.textContent = 'Discord Activity Connected! 🎮';
-        if (descEl) descEl.textContent = 'User profile & channel synchronized with Discord.';
+        if (descEl) descEl.textContent = `Player: ${nameInput.value} | Channel: ${discordSdk.channelId || 'Active'}`;
         return;
       }
     } catch (err) {
       console.warn('Discord SDK init note:', err);
+      if (dotEl) dotEl.style.background = '#EF4444';
+      if (titleEl) titleEl.textContent = 'Discord SDK Note';
+      if (descEl) descEl.textContent = err.message || 'Standalone fallback active';
     }
-
-    if (dotEl) dotEl.style.background = '#38BDF8';
-    if (titleEl) titleEl.textContent = 'Standalone Web Mode (Webhooks Ready)';
-    if (descEl) descEl.textContent = 'Running in browser. You can link your Discord server channel via Webhook.';
   }
 
   // ==================== DAILY SEED & COUNTDOWN ====================
