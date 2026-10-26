@@ -331,8 +331,15 @@ app.get('/api/avatar-proxy', async (req, res) => {
     }
     // Only allow Discord CDN URLs for security
     const parsed = new URL(url);
-    if (!parsed.hostname.endsWith('discord.com') && !parsed.hostname.endsWith('discordapp.com')) {
-      return res.status(403).json({ ok: false, error: 'Only Discord CDN URLs are allowed' });
+    const host = parsed.hostname.toLowerCase();
+    const isDiscordDomain = host.endsWith('discord.com') ||
+                            host.endsWith('discordapp.com') ||
+                            host.endsWith('discordapp.net') ||
+                            host.endsWith('discord.media') ||
+                            host.endsWith('discord.gg');
+
+    if (!isDiscordDomain && !host.endsWith('githubusercontent.com') && !host.endsWith('imgur.com')) {
+      return res.status(403).json({ ok: false, error: 'Unsupported avatar domain' });
     }
 
     const imgRes = await fetch(url);
@@ -341,6 +348,9 @@ app.get('/api/avatar-proxy', async (req, res) => {
     }
 
     const contentType = imgRes.headers.get('content-type') || 'image/png';
+    if (!contentType.startsWith('image/')) {
+      return res.status(400).json({ ok: false, error: 'URL did not return an image' });
+    }
     const arrayBuffer = await imgRes.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString('base64');
 

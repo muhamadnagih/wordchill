@@ -1528,9 +1528,10 @@
   if (webhookInput) webhookInput.value = localStorage.getItem('wordchill_discord_webhook') || '';
   if (avatarInput) avatarInput.value = localStorage.getItem('wordchill_discord_avatar') || '';
 
-  document.getElementById('discordConfigBtn')?.addEventListener('click', () => {
-    discordModal?.classList.remove('hidden');
-  });
+  const openDiscordModal = () => discordModal?.classList.remove('hidden');
+  document.getElementById('discordConfigBtn')?.addEventListener('click', openDiscordModal);
+  document.getElementById('globalPlayerAvatar')?.addEventListener('click', openDiscordModal);
+  document.getElementById('globalAvatarEmoji')?.addEventListener('click', openDiscordModal);
   document.getElementById('closeDiscordModalBtn')?.addEventListener('click', () => {
     discordModal?.classList.add('hidden');
   });
