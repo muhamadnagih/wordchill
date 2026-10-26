@@ -1,0 +1,11 @@
+node_modules
+*.exe
+cloudflared*
+tests
+add-*.js
+apply-*.js
+build-*.js
+download-*.js
+fix-*.js
+make-*.js
+upgrade-*.js

@@ -57,3 +57,47 @@ test('Secret word is independent per room and never leaked before round finishes
   assert.ok(badGuess.error);
   assert.equal(roomA.players.get('h1').guesses.length, 0);
 });
+
+test('Daily seed mechanism yields consistent word for all players on same UTC day', () => {
+  const { getDailyWord, getDailyNumber, isValidWord } = require('../server/dictionary');
+  const dayNum = getDailyNumber(new Date('2026-10-22T00:00:00Z'));
+  assert.ok(dayNum > 0);
+
+  // English 5-letter
+  const enWord1 = getDailyWord(dayNum, 5, 'en');
+  const enWord2 = getDailyWord(dayNum, 5, 'en');
+  assert.equal(enWord1, enWord2);
+  assert.equal(enWord1.length, 5);
+  assert.ok(isValidWord(enWord1, 5, 'en'));
+
+  // Arabic 5-letter
+  const arWord1 = getDailyWord(dayNum, 5, 'ar');
+  const arWord2 = getDailyWord(dayNum, 5, 'ar');
+  assert.equal(arWord1, arWord2);
+  assert.equal(arWord1.length, 5);
+  assert.ok(isValidWord(arWord1, 5, 'ar'));
+});
+
+test('Challenge payload accurately encapsulates and recovers game session data', () => {
+  const { createChallengePayload, decodeChallengePayload } = require('../server/dictionary');
+  const token = createChallengePayload({
+    secretWord: 'CLOUD',
+    lang: 'en',
+    wordLength: 5,
+    maxAttempts: 6,
+    challengerName: 'Nageh',
+    challengerScore: 3,
+    dayNumber: 660
+  });
+
+  assert.ok(typeof token === 'string' && token.length > 10);
+  const decoded = decodeChallengePayload(token);
+  assert.equal(decoded.secretWord, 'CLOUD');
+  assert.equal(decoded.lang, 'en');
+  assert.equal(decoded.wordLength, 5);
+  assert.equal(decoded.maxAttempts, 6);
+  assert.equal(decoded.challengerName, 'Nageh');
+  assert.equal(decoded.challengerScore, 3);
+  assert.equal(decoded.dayNumber, 660);
+});
+

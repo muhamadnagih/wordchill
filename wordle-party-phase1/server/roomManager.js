@@ -1,12 +1,11 @@
 const crypto = require('crypto');
 const { evaluateGuess } = require('./gameEngine');
-const { getSecretWord, isValidWord, SUPPORTED_LENGTHS } = require('./dictionary');
+const { getSecretWord, isValidWord, normalizeWord, SUPPORTED_LENGTHS, SUPPORTED_LANGS } = require('./dictionary');
 
 class RoomManager {
   constructor() {
     this.rooms = new Map();
     this.soloGames = new Map();
-    this.rateLimits = new Map();
   }
 
   generateRoomCode() {
@@ -21,25 +20,17 @@ class RoomManager {
     return code;
   }
 
-  checkRateLimit(key, minIntervalMs = 250) {
-    const now = Date.now();
-    const last = this.rateLimits.get(key) || 0;
-    if (now - last < minIntervalMs) {
-      return false;
-    }
-    this.rateLimits.set(key, now);
-    return true;
-  }
-
   // ==================== SOLO MODE ====================
-  createSoloGame({ wordLength = 5, maxAttempts = 6 } = {}) {
+  createSoloGame({ wordLength = 5, maxAttempts = 6, lang = 'en' } = {}) {
+    const safeLang = SUPPORTED_LANGS.includes(lang) ? lang : 'en';
     const len = SUPPORTED_LENGTHS.includes(Number(wordLength)) ? Number(wordLength) : 5;
     const attempts = Math.min(Math.max(Number(maxAttempts) || 6, 4), 8);
     const sessionId = crypto.randomUUID();
-    const secretWord = getSecretWord(len, 'en');
+    const secretWord = getSecretWord(len, safeLang);
 
     const session = {
       sessionId,
+      lang: safeLang,
       wordLength: len,
       maxAttempts: attempts,
       secretWord,
@@ -53,31 +44,29 @@ class RoomManager {
   }
 
   submitSoloGuess(sessionId, rawGuess) {
-    if (!this.checkRateLimit(`solo:${sessionId}`, 200)) {
-      return { error: 'Please wait a moment before submitting again.' };
-    }
-
     const session = this.soloGames.get(sessionId);
     if (!session) return { error: 'Solo session not found.' };
     if (session.status !== 'IN_PROGRESS') {
       return { error: 'This game has already finished.' };
     }
 
-    const guess = (rawGuess || '').trim().toUpperCase();
+    const isAr = session.lang === 'ar';
+    const guess = normalizeWord(rawGuess || '', session.lang);
+
     if (guess.length !== session.wordLength) {
-      return { error: `Word must be exactly ${session.wordLength} letters.` };
+      return { error: isAr ? `الكلمة يجب أن تكون ${session.wordLength} حروف!` : `Word must be ${session.wordLength} letters.` };
     }
-    if (!isValidWord(guess, session.wordLength)) {
-      return { error: 'Not in word list. Try a common English word!' };
+    if (!isValidWord(guess, session.wordLength, session.lang)) {
+      return { error: isAr ? 'الكلمة غير موجودة في القاموس! جرب كلمة شائعة.' : 'Not in word list. Try a common word!' };
     }
     if (session.guesses.some(g => g.word === guess)) {
-      return { error: 'You already tried that word!' };
+      return { error: isAr ? 'لقد جربت هذه الكلمة من قبل!' : 'You already tried that word!' };
     }
 
-    const evaluations = evaluateGuess(guess, session.secretWord);
+    const evaluations = evaluateGuess(guess, session.secretWord, session.lang);
     session.guesses.push({ word: guess, evaluations });
 
-    if (guess === session.secretWord) {
+    if (evaluations.every(c => c.state === 'correct')) {
       session.status = 'WON';
     } else if (session.guesses.length >= session.maxAttempts) {
       session.status = 'LOST';
@@ -93,6 +82,7 @@ class RoomManager {
     const isFinished = session.status === 'WON' || session.status === 'LOST';
     return {
       sessionId: session.sessionId,
+      lang: session.lang,
       wordLength: session.wordLength,
       maxAttempts: session.maxAttempts,
       guesses: session.guesses,
@@ -102,12 +92,13 @@ class RoomManager {
   }
 
   // ==================== MULTIPLAYER ROOMS ====================
-  createRoom({ hostId, hostName, socketId, roomName, wordLength = 5, maxPlayers = 6, maxAttempts = 6, isPublic = true }) {
+  createRoom({ hostId, hostName, socketId, roomName, wordLength = 5, maxPlayers = 6, maxAttempts = 6, isPublic = true, lang = 'en' }) {
+    const safeLang = SUPPORTED_LANGS.includes(lang) ? lang : 'en';
     const len = SUPPORTED_LENGTHS.includes(Number(wordLength)) ? Number(wordLength) : 5;
     const cap = Math.min(Math.max(Number(maxPlayers) || 6, 2), 10);
     const attempts = Math.min(Math.max(Number(maxAttempts) || 6, 4), 8);
     const code = this.generateRoomCode();
-    const secretWord = getSecretWord(len, 'en');
+    const secretWord = getSecretWord(len, safeLang);
 
     const cleanHostName = (hostName || 'Player 1').trim().slice(0, 18) || 'Player 1';
 
@@ -115,6 +106,7 @@ class RoomManager {
       code,
       name: (roomName || `${cleanHostName}'s Arena`).trim().slice(0, 28),
       hostId,
+      lang: safeLang,
       wordLength: len,
       maxPlayers: cap,
       maxAttempts: attempts,
@@ -205,10 +197,6 @@ class RoomManager {
   }
 
   submitMultiplayerGuess({ code, playerId, rawGuess }) {
-    if (!this.checkRateLimit(`mp:${code}:${playerId}`, 250)) {
-      return { error: 'Submitting too fast! Please wait a moment.' };
-    }
-
     const room = this.rooms.get((code || '').toUpperCase());
     if (!room) return { error: 'Room not found.' };
     if (room.status !== 'IN_PROGRESS') return { error: 'Round is not currently active.' };
@@ -219,22 +207,24 @@ class RoomManager {
       return { error: 'You have already finished all attempts for this round.' };
     }
 
-    const guess = (rawGuess || '').trim().toUpperCase();
+    const isAr = room.lang === 'ar';
+    const guess = normalizeWord(rawGuess || '', room.lang);
+
     if (guess.length !== room.wordLength) {
-      return { error: `Word must be exactly ${room.wordLength} letters.` };
+      return { error: isAr ? `الكلمة يجب أن تكون ${room.wordLength} حروف!` : `Word must be ${room.wordLength} letters.` };
     }
-    if (!isValidWord(guess, room.wordLength)) {
-      return { error: 'Word not found in dictionary!' };
+    if (!isValidWord(guess, room.wordLength, room.lang)) {
+      return { error: isAr ? 'الكلمة غير موجودة في القاموس!' : 'Word not found in dictionary!' };
     }
     if (player.guesses.some(g => g.word === guess)) {
-      return { error: 'You already guessed that word!' };
+      return { error: isAr ? 'لقد جربت هذه الكلمة من قبل!' : 'You already guessed that word!' };
     }
 
-    const evaluations = evaluateGuess(guess, room.secretWord);
+    const evaluations = evaluateGuess(guess, room.secretWord, room.lang);
     const now = Date.now();
     player.guesses.push({ word: guess, evaluations, submittedAt: now });
 
-    if (guess === room.secretWord) {
+    if (evaluations.every(c => c.state === 'correct')) {
       player.status = 'SOLVED';
       player.solvedAt = now;
     } else if (player.guesses.length >= room.maxAttempts) {
@@ -261,11 +251,11 @@ class RoomManager {
     }
     if (room.players.size < 2) {
       room.status = 'WAITING';
-      room.secretWord = getSecretWord(room.wordLength, 'en', room.secretWord);
+      room.secretWord = getSecretWord(room.wordLength, room.lang, room.secretWord);
       return { room };
     }
 
-    room.secretWord = getSecretWord(room.wordLength, 'en', room.secretWord);
+    room.secretWord = getSecretWord(room.wordLength, room.lang, room.secretWord);
     room.roundNumber += 1;
     room.status = 'IN_PROGRESS';
     room.startedAt = Date.now();
@@ -286,14 +276,10 @@ class RoomManager {
       for (const [playerId, player] of room.players.entries()) {
         if (player.socketId === socketId) {
           player.connected = false;
-
           if (room.hostId === playerId) {
             const nextHost = Array.from(room.players.values()).find(p => p.connected && p.id !== playerId);
-            if (nextHost) {
-              room.hostId = nextHost.id;
-            }
+            if (nextHost) room.hostId = nextHost.id;
           }
-
           if (room.status === 'IN_PROGRESS') {
             const activeConnected = Array.from(room.players.values()).filter(p => p.connected);
             if (activeConnected.length > 0 && activeConnected.every(p => p.status !== 'PLAYING')) {
@@ -301,7 +287,6 @@ class RoomManager {
               room.finishedAt = Date.now();
             }
           }
-
           affectedRooms.push(room);
         }
       }
@@ -312,19 +297,15 @@ class RoomManager {
   leaveRoom({ code, playerId }) {
     const room = this.rooms.get((code || '').toUpperCase());
     if (!room) return null;
-
     room.players.delete(playerId);
-
     if (room.players.size === 0) {
       this.rooms.delete(room.code);
       return { deleted: true, code: room.code };
     }
-
     if (room.hostId === playerId) {
       const nextHost = room.players.values().next().value;
       if (nextHost) room.hostId = nextHost.id;
     }
-
     if (room.status === 'IN_PROGRESS') {
       const everyoneDone = Array.from(room.players.values()).every(p => p.status !== 'PLAYING');
       if (everyoneDone) {
@@ -332,7 +313,6 @@ class RoomManager {
         room.finishedAt = Date.now();
       }
     }
-
     return { room, deleted: false };
   }
 
@@ -374,6 +354,7 @@ class RoomManager {
       code: room.code,
       name: room.name,
       hostId: room.hostId,
+      lang: room.lang,
       wordLength: room.wordLength,
       maxPlayers: room.maxPlayers,
       maxAttempts: room.maxAttempts,
@@ -393,6 +374,7 @@ class RoomManager {
         list.push({
           code: room.code,
           name: room.name,
+          lang: room.lang,
           wordLength: room.wordLength,
           maxAttempts: room.maxAttempts,
           playerCount: room.players.size,

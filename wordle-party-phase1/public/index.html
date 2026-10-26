@@ -2,160 +2,169 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WordChill — Multiplayer Word Party Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>WordChill — Multiplayer Word Party & Discord Activity</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700;800;900&family=Fredoka:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- Floating Ambient Game Background -->
-  <div class="bg-decor" aria-hidden="true">
-    <span class="floating-tile t1">W</span>
-    <span class="floating-tile t2">C</span>
-    <span class="floating-tile t3">H</span>
-    <span class="floating-tile t4">I</span>
-    <span class="floating-tile t5">L</span>
-    <span class="floating-tile t6">❄️</span>
-  </div>
+  <!-- الخلفية العلوية المنحنية المستوحاة من التصميم -->
+  <div class="curved-hero-bg"></div>
 
-  <div class="app-shell">
-    <!-- Top Arcade Header -->
-    <header class="topbar">
-      <div class="brand" id="navHomeBtn" role="button" tabindex="0" title="Back to Main Menu">
-        <div class="logo-mark">
-          <svg viewBox="0 0 64 64" width="46" height="46" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- Back Tile (Chill Cyan) -->
-            <rect x="24" y="6" width="34" height="34" rx="9" transform="rotate(8 24 6)" fill="#0891B2"/>
-            <rect x="24" y="4" width="34" height="31" rx="9" transform="rotate(8 24 4)" fill="url(#cyanGrad)" stroke="#67E8F9" stroke-width="1.5"/>
-            <text x="38" y="27" transform="rotate(8 38 24)" fill="#FFFFFF" font-family="Fredoka, sans-serif" font-weight="700" font-size="20" text-anchor="middle">C</text>
-            <!-- Front Tile (Mint Emerald) -->
-            <rect x="4" y="22" width="36" height="36" rx="10" transform="rotate(-6 4 22)" fill="#047857"/>
-            <rect x="4" y="19" width="36" height="33" rx="10" transform="rotate(-6 4 19)" fill="url(#mintGrad)" stroke="#6EE7B7" stroke-width="1.5"/>
-            <text x="21" y="43" transform="rotate(-6 21 40)" fill="#FFFFFF" font-family="Fredoka, sans-serif" font-weight="700" font-size="21" text-anchor="middle">W</text>
-            <!-- Snowflake Sparkle -->
-            <circle cx="52" cy="48" r="7" fill="#38BDF8" />
-            <path d="M52 43V53M47 48H57" stroke="#FFF" stroke-width="2" stroke-linecap="round"/>
-            <defs>
-              <linearGradient id="cyanGrad" x1="24" y1="4" x2="58" y2="35" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#22D3EE"/>
-                <stop offset="1" stop-color="#0284C7"/>
-              </linearGradient>
-              <linearGradient id="mintGrad" x1="4" y1="19" x2="40" y2="52" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#34D399"/>
-                <stop offset="1" stop-color="#059669"/>
-              </linearGradient>
-            </defs>
-          </svg>
-        </div>
-        <div class="brand-text">
-          <div class="brand-title">WORD<span>CHILL</span></div>
-          <span class="brand-sub">PARTY WORD ARENA</span>
-        </div>
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- الشريط العلوي -->
+  <header class="topbar">
+    <div class="brand" id="navHomeBtn" title="Back to Main Menu">
+      <div class="tilted-logo">
+        <span class="logo-tile t1">W</span>
+        <span class="logo-tile t2">O</span>
+        <span class="logo-tile t3">R</span>
+        <span class="logo-tile t4">D</span>
+        <span class="logo-tile t5">C</span>
+        <span class="logo-tile t2">H</span>
+        <span class="logo-tile t1">I</span>
+        <span class="logo-tile t4">L</span>
+        <span class="logo-tile t1">L</span>
       </div>
+    </div>
 
-      <div class="topbar-actions">
-        <div class="player-pill">
-          <span class="player-avatar-dot">😎</span>
-          <input type="text" id="globalPlayerName" maxlength="16" placeholder="Nickname" aria-label="Player Nickname" />
-        </div>
-        <button id="howToPlayModalBtn" class="icon-btn" title="How to Play">❓</button>
-        <button id="themeToggleBtn" class="icon-btn" title="Switch Theme" aria-label="Toggle Theme">☀️</button>
+    <div class="topbar-actions">
+      <div class="profile-pill">
+        <img id="globalPlayerAvatar" class="profile-avatar-img hidden" alt="Avatar" />
+        <span id="globalAvatarEmoji" class="profile-icon">😎</span>
+        <input id="globalPlayerName" type="text" maxlength="16" placeholder="Your Nickname" />
       </div>
-    </header>
+      <button id="discordConfigBtn" class="icon-circle-btn discord-badge-btn" title="Discord Activity & Channel Webhook">🎮</button>
+      <button id="howToPlayModalBtn" class="icon-circle-btn" title="How to Play">?</button>
+      <button id="themeToggleBtn" class="icon-circle-btn" title="Toggle Dark/Light Mode">☀️</button>
+    </div>
+  </header>
 
-    <!-- Toast Container -->
-    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
-
+  <main class="app-shell">
     <!-- ==================== 1. MAIN MENU SCREEN ==================== -->
-    <main id="screen-menu" class="screen active">
-      <div class="menu-hero">
-        <div class="hero-tiles-banner" aria-label="WORDCHILL">
-          <span class="mini-hero-tile correct">W</span>
-          <span class="mini-hero-tile present">O</span>
-          <span class="mini-hero-tile absent">R</span>
-          <span class="mini-hero-tile correct">D</span>
-          <span class="mini-hero-gap"></span>
-          <span class="mini-hero-tile chill">C</span>
-          <span class="mini-hero-tile chill">H</span>
-          <span class="mini-hero-tile chill">I</span>
-          <span class="mini-hero-tile chill">L</span>
-          <span class="mini-hero-tile chill">L</span>
+    <section id="screen-menu" class="screen active">
+      <div class="hero-header">
+        <div class="hero-word-tiles">
+          <span class="w-tile white">W</span>
+          <span class="w-tile teal">O</span>
+          <span class="w-tile white">R</span>
+          <span class="w-tile coral">D</span>
+          <span class="w-tile white">S</span>
         </div>
-        <p class="hero-tagline">Keep your cool. Crack the secret word. Outplay the room!</p>
+        <h1 class="hero-title">Play Together, Chill Together</h1>
+        <p class="hero-subtitle">Bilingual English & Arabic word guessing with Discord Activities & Social Challenges</p>
       </div>
 
-      <div class="arcade-modes-grid">
-        <!-- SOLO CARD -->
-        <section class="arcade-card solo-theme">
-          <div class="card-glow"></div>
-          <div class="card-top-badge">❄️ CHILL SOLO</div>
-          <div class="card-art">🧊</div>
-          <h3>Solo Freeplay</h3>
-          <p>No daily lockouts. Pick your word length and train your brain with unlimited chill rounds.</p>
+      <!-- بانر التحدي اليومي السريع -->
+      <div class="daily-hero-banner surface-card">
+        <div class="daily-banner-info">
+          <div class="card-pill-badge gold-badge">⭐ DAILY SEED #<span id="dailyHeaderNum">---</span></div>
+          <h2 id="dailyHeaderTitle">WordChill Daily Challenge</h2>
+          <p class="card-desc">Every player in your server guesses the exact same secret word today! No spoilers.</p>
+          <div class="daily-meta-row">
+            <span class="meta-capsule">⏳ Next Word: <strong id="dailyCountdownText">--:--:--</strong></span>
+            <span class="meta-capsule" id="dailyDatePill">UTC Date</span>
+          </div>
+        </div>
+        <div class="daily-banner-actions">
+          <div class="pill-group" id="dailyLangGroup">
+            <button class="pill active" data-lang="en">🇬🇧 EN</button>
+            <button class="pill" data-lang="ar">🇪🇬 عربي</button>
+          </div>
+          <button id="playDailyBtn" class="btn-discord-blurple btn-lg-daily">
+            <span>📅 PLAY TODAY'S WORD</span>
+          </button>
+        </div>
+      </div>
 
-          <div class="length-selector-box">
-            <span class="selector-label">LETTERS</span>
-            <div class="pill-group" id="soloLengthGroup">
-              <button class="pill" data-len="4">4</button>
-              <button class="pill active" data-len="5">5</button>
-              <button class="pill" data-len="6">6</button>
-              <button class="pill" data-len="7">7</button>
+      <div class="menu-cards-grid">
+        <!-- كارت اللعب الفردي التدريبي -->
+        <div class="surface-card solo-card">
+          <div class="card-pill-badge">SOLO PRACTICE</div>
+          <h2>Custom Match</h2>
+          <p class="card-desc">Practice anytime, adjust word length, or test new strategies.</p>
+
+          <div class="selector-stack">
+            <div class="length-selector-box">
+              <span class="selector-label">LANGUAGE</span>
+              <div class="pill-group" id="soloLangGroup">
+                <button class="pill active" data-lang="en">🇬🇧 EN</button>
+                <button class="pill" data-lang="ar">🇪🇬 عربي</button>
+              </div>
+            </div>
+
+            <div class="length-selector-box">
+              <span class="selector-label">LETTERS</span>
+              <div class="pill-group" id="soloLengthGroup">
+                <button class="pill" data-len="4">4</button>
+                <button class="pill active" data-len="5">5</button>
+                <button class="pill" data-len="6">6</button>
+                <button class="pill" data-len="7">7</button>
+              </div>
             </div>
           </div>
 
-          <button id="playSoloBtn" class="btn-3d btn-mint btn-block">
-            <span>▶ START SOLO RUN</span>
-          </button>
-        </section>
-
-        <!-- MULTIPLAYER CARD -->
-        <section class="arcade-card party-theme">
-          <div class="card-glow"></div>
-          <div class="card-top-badge">🔥 2–10 PLAYERS</div>
-          <div class="card-art">⚡</div>
-          <h3>Party Battle</h3>
-          <p>Host a private room or jump into a friend's lobby. Everyone races on the same secret word live!</p>
-
-          <button id="openCreateRoomBtn" class="btn-3d btn-cyan btn-block">
-            <span>➕ CREATE PARTY ROOM</span>
-          </button>
-
-          <div class="join-ticket-box">
-            <input type="text" id="joinCodeInput" maxlength="6" placeholder="ENTER 6-DIGIT CODE" />
-            <button id="joinRoomBtn" class="btn-3d btn-purple">JOIN</button>
+          <div class="play-btn-wrapper">
+            <button id="playSoloBtn" class="sketch-play-btn">
+              <span>PLAY SOLO</span>
+            </button>
           </div>
-        </section>
+        </div>
+
+        <!-- كارت اللعب الجماعي -->
+        <div class="surface-card mp-card">
+          <div class="card-pill-badge coral-badge">MULTIPLAYER PARTY</div>
+          <h2>Play With Friends</h2>
+          <p class="card-desc">Create a private room or jump into a live lobby with up to 10 players!</p>
+
+          <button id="openCreateRoomBtn" class="btn-primary-wave full-width">
+            ✨ Create New Room
+          </button>
+
+          <div class="divider-line"><span>OR JOIN WITH CODE</span></div>
+
+          <div class="join-code-row">
+            <input id="joinCodeInput" type="text" maxlength="6" placeholder="CODE (e.g. AB12CD)" />
+            <button id="joinRoomBtn" class="btn-secondary-wave">JOIN ↗</button>
+          </div>
+
+          <div class="public-rooms-box">
+            <div class="public-rooms-header">
+              <span>🌐 Open Public Rooms</span>
+              <button id="refreshPublicRoomsBtn" class="btn-mini-refresh">↻ Refresh</button>
+            </div>
+            <div id="publicRoomsList" class="public-rooms-list">
+              <p class="muted-text">No public rooms waiting right now. Host one above!</p>
+            </div>
+          </div>
+        </div>
       </div>
+    </section>
 
-      <!-- Live Open Lobbies Radar -->
-      <section class="lobby-radar-card">
-        <div class="radar-header">
-          <div class="radar-title">
-            <span class="pulse-dot"></span>
-            <h4>LIVE OPEN LOBBIES</h4>
-          </div>
-          <button id="refreshPublicRoomsBtn" class="btn-chip">↻ Refresh</button>
-        </div>
-        <div id="publicRoomsList" class="public-rooms-list">
-          <p class="muted-text">No public rooms waiting right now. Host one above!</p>
-        </div>
-      </section>
-    </main>
-
-    <!-- ==================== 2. ROOM CREATION SCREEN ==================== -->
-    <main id="screen-create" class="screen">
-      <section class="arcade-panel">
-        <div class="panel-header">
-          <button class="btn-chip" id="backFromCreateBtn">← Back</button>
-          <h2>🛠️ Host a WordChill Room</h2>
+    <!-- ==================== 2. CREATE ROOM SCREEN ==================== -->
+    <section id="screen-create" class="screen">
+      <div class="surface-card narrow-card">
+        <div class="card-top-bar">
+          <button id="backFromCreateBtn" class="circle-back-btn">←</button>
+          <h2>Room Setup</h2>
+          <div style="width:42px"></div>
         </div>
 
-        <div class="form-grid">
+        <div class="form-stack">
           <div class="form-group">
-            <label for="roomNameInput">ROOM TITLE</label>
-            <input type="text" id="roomNameInput" maxlength="28" placeholder="e.g. Chill Squad Arena" />
+            <label>ROOM NAME</label>
+            <input id="roomNameInput" type="text" maxlength="26" placeholder="e.g. Nagih's Chill Arena" />
+          </div>
+
+          <div class="form-group">
+            <label>DICTIONARY LANGUAGE</label>
+            <div class="pill-group large" id="createLangGroup">
+              <button class="pill active" data-lang="en">🇬🇧 English Words</button>
+              <button class="pill" data-lang="ar">🇪🇬 كلمات عربية</button>
+            </div>
           </div>
 
           <div class="form-group">
@@ -170,175 +179,248 @@
 
           <div class="form-row-2">
             <div class="form-group">
-              <label for="maxPlayersSelect">PLAYER LIMIT</label>
+              <label>MAX PLAYERS</label>
               <select id="maxPlayersSelect">
-                <option value="2">2 Players (1v1 Duel)</option>
+                <option value="2">2 Players</option>
                 <option value="4">4 Players</option>
                 <option value="6" selected>6 Players</option>
                 <option value="8">8 Players</option>
-                <option value="10">10 Players (Max Party)</option>
+                <option value="10">10 Players</option>
               </select>
             </div>
 
             <div class="form-group">
-              <label for="maxAttemptsSelect">MAX TRIES</label>
+              <label>MAX TRIES</label>
               <select id="maxAttemptsSelect">
-                <option value="5">5 Tries (Blitz)</option>
-                <option value="6" selected>6 Tries (Classic)</option>
-                <option value="7">7 Tries (Chill)</option>
+                <option value="5">5 Tries</option>
+                <option value="6" selected>6 Tries (Standard)</option>
+                <option value="7">7 Tries</option>
               </select>
             </div>
           </div>
 
-          <label class="checkbox-card">
-            <input type="checkbox" id="roomPublicCheckbox" checked />
-            <span>List room in Open Lobbies so anyone can join</span>
+          <label class="checkbox-pill">
+            <input id="roomPublicCheckbox" type="checkbox" checked />
+            <span>Show room in Public Lobby list</span>
           </label>
 
-          <div class="config-preview">
-            <span>MATCH RULES</span>
-            <strong id="configPreviewText">5-Letter Word • Max 6 Players • 6 Attempts</strong>
+          <div class="preview-pill" id="configPreviewText">
+            🇬🇧 EN • 5 Letters • Max 6 Players • 6 Tries
           </div>
 
-          <button id="confirmCreateRoomBtn" class="btn-3d btn-cyan btn-block btn-lg">
-            🚀 LAUNCH WAITING LOBBY
+          <div class="play-btn-wrapper">
+            <button id="confirmCreateRoomBtn" class="sketch-play-btn">
+              <span>LAUNCH ROOM</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 3. LOBBY WAITING SCREEN ==================== -->
+    <section id="screen-lobby" class="screen">
+      <div class="surface-card lobby-card">
+        <div class="lobby-header-wave">
+          <div>
+            <span class="card-pill-badge">WAITING LOBBY</span>
+            <h2 id="lobbyRoomName">WordChill Arena</h2>
+          </div>
+
+          <div class="room-code-capsule">
+            <span class="code-label">ROOM CODE</span>
+            <strong id="lobbyRoomCode">------</strong>
+            <button id="copyCodeBtn" class="btn-chip">Copy</button>
+          </div>
+        </div>
+
+        <div class="lobby-badges-row">
+          <span id="lobbyWordLenBadge" class="soft-badge">🇬🇧 English • 5 Letters</span>
+          <span id="lobbyAttemptsBadge" class="soft-badge">🎯 6 Attempts</span>
+          <span id="lobbyCapacityBadge" class="soft-badge">👥 1 / 6 Players</span>
+        </div>
+
+        <div id="lobbyPlayersGrid" class="lobby-players-grid"></div>
+
+        <p id="lobbyWaitHint" class="wait-hint-text">Need at least 2 players to start...</p>
+
+        <div class="lobby-actions-row">
+          <button id="leaveLobbyBtn" class="btn-secondary-wave">← Leave</button>
+          <button id="startMultiplayerBtn" class="sketch-play-btn">
+            <span>START MATCH</span>
           </button>
         </div>
-      </section>
-    </main>
-
-    <!-- ==================== 3. WAITING LOBBY SCREEN ==================== -->
-    <main id="screen-lobby" class="screen">
-      <section class="arcade-panel">
-        <div class="lobby-top">
-          <div>
-            <span class="status-pill waiting">⏳ WAITING FOR PLAYERS</span>
-            <h2 id="lobbyRoomName">Room Lobby</h2>
-          </div>
-
-          <div class="ticket-code-card">
-            <span class="ticket-label">INVITE CODE</span>
-            <div class="ticket-code-row">
-              <strong id="lobbyRoomCode">------</strong>
-              <button id="copyCodeBtn" class="btn-chip">📋 Copy</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="lobby-meta-badges">
-          <span class="meta-badge" id="lobbyWordLenBadge">🔤 5 Letters</span>
-          <span class="meta-badge" id="lobbyAttemptsBadge">🎯 6 Attempts</span>
-          <span class="meta-badge" id="lobbyCapacityBadge">👥 1 / 6 Players</span>
-        </div>
-
-        <div class="lobby-players-grid" id="lobbyPlayersGrid"></div>
-
-        <div class="lobby-footer">
-          <button id="leaveLobbyBtn" class="btn-3d btn-danger">🚪 Leave</button>
-          <div class="host-start-wrap">
-            <span id="lobbyWaitHint" class="muted-text">Need at least 2 players to start</span>
-            <button id="startMultiplayerBtn" class="btn-3d btn-mint btn-lg" disabled>▶ START MATCH</button>
-          </div>
-        </div>
-      </section>
-    </main>
+      </div>
+    </section>
 
     <!-- ==================== 4. ACTIVE GAME SCREEN ==================== -->
-    <main id="screen-game" class="screen">
-      <div class="game-layout">
-        <section class="board-stage">
-          <!-- Compact Game HUD Bar -->
-          <div class="game-HUD">
-            <div class="hud-left">
-              <span class="status-pill in-progress" id="gameModeBadge">CHILL SOLO</span>
-              <span class="hud-rule-pill" id="gameRuleInfo">5 Letters • 6 Tries</span>
-            </div>
-            <div class="hud-right">
-              <span class="tries-counter" id="remainingTriesText">6 tries left</span>
-              <button id="quitActiveGameBtn" class="btn-chip danger">✕ Exit</button>
-            </div>
-          </div>
+    <section id="screen-game" class="screen">
+      <div class="game-top-bar">
+        <button id="quitActiveGameBtn" class="circle-back-btn" title="Exit Game">←</button>
+        <div class="game-center-pills">
+          <span id="gameModeBadge" class="mode-capsule">SOLO MODE</span>
+          <span id="gameRuleInfo" class="rule-capsule">5 Letters • 6 Tries</span>
+        </div>
+        <span id="remainingTriesText" class="timer-capsule">6 tries left</span>
+      </div>
 
-          <!-- 3D Wordle Tile Grid + Floating Solo Result Modal -->
-          <div class="board-container">
-            <div id="wordGrid" class="word-grid"></div>
+      <!-- بانر حالة التحدي النشط (لو رابط تحدي أو اليومي) -->
+      <div id="activeChallengeBanner" class="active-challenge-bar hidden">
+        <span id="activeChallengeText">⚔️ Challenge active</span>
+      </div>
 
-            <!-- Floating Overlay Modal for Solo End (Doesn't push keyboard down!) -->
-            <div id="soloEndBanner" class="solo-end-overlay hidden">
-              <div class="solo-end-modal">
-                <div class="modal-trophy" id="soloEndIcon">🏆</div>
-                <h3 id="soloEndTitle">Round Complete!</h3>
-                <p id="soloEndSecret">The secret word was <strong>-----</strong></p>
-                <div class="solo-end-actions">
-                  <button id="soloPlayAgainBtn" class="btn-3d btn-mint">🔄 Next Word</button>
-                  <button id="soloBackMenuBtn" class="btn-3d btn-slate">🏠 Menu</button>
+      <div class="game-layout solo-only">
+        <div class="board-area surface-card">
+          <div id="wordGrid" class="word-grid"></div>
+
+          <!-- بانر نهاية الجيم الفردي والتحدي -->
+          <div id="soloEndBanner" class="solo-end-banner hidden">
+            <div class="solo-end-header">
+              <span id="soloEndIcon" class="solo-end-icon">🏆</span>
+              <div>
+                <h3 id="soloEndTitle">Brilliant!</h3>
+                <p id="soloEndSecret">The secret word was <strong>WORLD</strong></p>
+                <div id="soloChallengeComparison" class="challenge-comparison-pill hidden"></div>
+              </div>
+            </div>
+
+            <!-- كارت معاينة ديسكورد التفاعلي -->
+            <div id="discordPreviewContainer" class="discord-share-box">
+              <div class="discord-card-wrapper">
+                <img id="discordCardImg" class="discord-card-preview" alt="Discord Result Card" />
+                <div id="discordCardLoading" class="discord-card-loading">🎨 Generating official Discord card...</div>
+              </div>
+
+              <div class="discord-actions-grid">
+                <button id="sendToDiscordBtn" class="btn-discord-blurple full-width">
+                  <span>📢 Send to Discord Room (Play now!)</span>
+                </button>
+                <div class="share-secondary-row">
+                  <button id="copyChallengeLinkBtn" class="btn-challenge-gold">
+                    <span>⚔️ Challenge Friends (Copy Link)</span>
+                  </button>
+                  <button id="copyEmojiGridBtn" class="btn-secondary-wave">
+                    <span>📋 Copy Emoji Grid</span>
+                  </button>
                 </div>
               </div>
             </div>
+
+            <div class="solo-end-actions">
+              <button id="soloPlayAgainBtn" class="btn-primary-wave">Play Again ↻</button>
+              <button id="soloBackMenuBtn" class="btn-secondary-wave">Main Menu</button>
+            </div>
           </div>
 
-          <!-- Tactile 3D On-Screen Keyboard -->
           <div id="keyboard" class="keyboard"></div>
-        </section>
+        </div>
 
-        <!-- Multiplayer Live Progress Sidebar -->
-        <aside id="mpLiveSidebar" class="mp-sidebar hidden">
+        <!-- القائمة الجانبية للاعبين في الأونلاين -->
+        <aside id="mpLiveSidebar" class="mp-sidebar surface-card hidden">
           <div class="sidebar-header">
-            <h3>⚡ LIVE RACE</h3>
-            <span id="sidebarRoomCode" class="code-tag">#------</span>
+            <h3>Live Opponents</h3>
+            <span id="sidebarRoomCode" class="code-pill">#------</span>
           </div>
           <div id="liveOpponentsList" class="opponents-list"></div>
         </aside>
       </div>
-    </main>
+    </section>
 
-    <!-- ==================== 5. RESULTS SCREEN (MULTIPLAYER) ==================== -->
-    <main id="screen-results" class="screen">
-      <section class="arcade-panel results-card">
-        <span class="status-pill finished">🏁 ROUND COMPLETE</span>
-        <h2 id="resultsHeadline">Party Standings</h2>
-
-        <div class="secret-reveal-box">
-          <span>SECRET WORD</span>
-          <strong id="resultsSecretWord">-----</strong>
+    <!-- ==================== 5. RESULTS / LEADERBOARD SCREEN ==================== -->
+    <section id="screen-results" class="screen">
+      <div class="surface-card results-card">
+        <div class="hero-word-tiles small-tiles">
+          <span class="w-tile white">R</span>
+          <span class="w-tile teal">A</span>
+          <span class="w-tile white">N</span>
+          <span class="w-tile coral">K</span>
+          <span class="w-tile white">S</span>
         </div>
 
-        <div id="resultsLeaderboard" class="leaderboard-list"></div>
+        <h2 class="results-title">Match Leaderboard</h2>
+
+        <div class="secret-reveal-capsule">
+          <span>SECRET WORD</span>
+          <strong id="resultsSecretWord">CHILL</strong>
+        </div>
+
+        <div id="resultsLeaderboard" class="results-leaderboard"></div>
+
+        <!-- مشاركة كارت الأونلاين في ديسكورد -->
+        <div id="mpDiscordShareContainer" class="discord-share-box mp-results-discord">
+          <img id="mpDiscordCardImg" class="discord-card-preview hidden" alt="Multiplayer Discord Card" />
+          <button id="sendMpToDiscordBtn" class="btn-discord-blurple full-width">
+            <span>📢 Post Match Result to Discord</span>
+          </button>
+        </div>
 
         <div class="results-actions">
-          <button id="resultsMainMenuBtn" class="btn-3d btn-slate">🏠 Main Menu</button>
-          <button id="resultsNewRoundBtn" class="btn-3d btn-mint btn-lg hidden">🔄 Play Next Round</button>
+          <button id="resultsMainMenuBtn" class="btn-secondary-wave">Main Menu</button>
+          <button id="resultsNewRoundBtn" class="sketch-play-btn">
+            <span>NEXT ROUND ↗</span>
+          </button>
         </div>
-      </section>
-    </main>
+      </div>
+    </section>
+  </main>
 
-    <!-- ==================== HOW TO PLAY MODAL ==================== -->
-    <div id="howToModal" class="modal-backdrop hidden">
-      <div class="modal-box">
-        <div class="modal-top">
-          <h3>❄️ How to Play WordChill</h3>
-          <button id="closeHowToBtn" class="btn-chip">✕</button>
+  <!-- نافذة إعدادات ديسكورد (Discord Settings & Webhook Modal) -->
+  <div id="discordModal" class="modal-backdrop hidden">
+    <div class="surface-card modal-card">
+      <div class="card-top-bar">
+        <h3>🎮 Discord Activity & Channel Sync</h3>
+        <button id="closeDiscordModalBtn" class="circle-back-btn">✕</button>
+      </div>
+      <div class="form-stack">
+        <div class="discord-status-banner">
+          <div class="status-indicator-dot" id="discordStatusDot"></div>
+          <div>
+            <strong id="discordStatusTitle">Discord Mode: Detecting...</strong>
+            <p id="discordStatusDesc" class="muted-text">Automatically links user avatars in Discord Activities.</p>
+          </div>
         </div>
-        <p class="modal-desc">Guess the hidden word in 6 tries! After each guess, the tiles flip to show how close you are:</p>
-        <div class="legend-stack">
-          <div class="legend-row">
-            <span class="tile-demo correct">C</span>
-            <div><strong>Mint Green (Exact Match)</strong><p>Letter is in the word and in the right spot.</p></div>
-          </div>
-          <div class="legend-row">
-            <span class="tile-demo present">H</span>
-            <div><strong>Amber Gold (Wrong Spot)</strong><p>Letter is in the word, but in another spot.</p></div>
-          </div>
-          <div class="legend-row">
-            <span class="tile-demo absent">L</span>
-            <div><strong>Frosted Slate (Miss)</strong><p>Letter is not in the secret word at all.</p></div>
-          </div>
+
+        <div class="form-group">
+          <label>DISCORD CHANNEL WEBHOOK URL</label>
+          <input id="discordWebhookInput" type="text" placeholder="https://discord.com/api/webhooks/..." />
+          <small class="muted-text">Paste the Webhook from your server's text channel to enable 1-click Result Cards.</small>
+        </div>
+
+        <div class="form-group">
+          <label>DISCORD AVATAR URL (OPTIONAL)</label>
+          <input id="discordAvatarInput" type="text" placeholder="https://cdn.discordapp.com/avatars/..." />
+          <small class="muted-text">Auto-filled if inside Discord Activity, or paste your Discord avatar link.</small>
+        </div>
+
+        <button id="saveDiscordConfigBtn" class="btn-primary-wave full-width">Save Discord Settings ✅</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة شرح اللعبة -->
+  <div id="howToModal" class="modal-backdrop hidden">
+    <div class="surface-card modal-card">
+      <div class="card-top-bar">
+        <h3>How to Play WordChill</h3>
+        <button id="closeHowToBtn" class="circle-back-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p>Guess the hidden word in 6 tries (English or Arabic!). After each guess, the tile colors reveal how close you are:</p>
+        <div class="example-tiles-row">
+          <span class="ex-tile correct">W</span>
+          <span><strong>Teal Green:</strong> Letter is in the word and in the correct spot.</span>
+        </div>
+        <div class="example-tiles-row">
+          <span class="ex-tile present">O</span>
+          <span><strong>Coral Orange:</strong> Letter is in the word, but in another spot.</span>
+        </div>
+        <div class="example-tiles-row">
+          <span class="ex-tile absent">R</span>
+          <span><strong>Muted Slate:</strong> Letter is not in the word at all.</span>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="/client.js"></script>
+  <script src="client.js"></script>
 </body>
 </html>

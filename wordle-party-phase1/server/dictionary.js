@@ -3,92 +3,137 @@ const path = require('path');
 const crypto = require('crypto');
 
 const SUPPORTED_LENGTHS = [4, 5, 6, 7];
+const SUPPORTED_LANGS = ['en', 'ar'];
 
-// Fallback starter dictionary in case words-en.json has not been generated yet
-const FALLBACK_EN = {
-  4: {
-    answers: ['GAME', 'PLAY', 'WORD', 'TIME', 'FIRE', 'WIND', 'STAR', 'MOON', 'CODE', 'FAST', 'GOLD', 'HERO'],
-    allowed: ['ABLE', 'ACID', 'AREA', 'ARMY', 'AWAY', 'BACK', 'BALL', 'BAND', 'BANK', 'BASE', 'BEAR', 'BEAT']
-  },
-  5: {
-    answers: ['SPARK', 'CRANE', 'SLATE', 'AUDIO', 'FLAME', 'BRAVE', 'CLOUD', 'DREAM', 'GHOST', 'LIGHT', 'OCEAN'],
-    allowed: ['ABOUT', 'ABOVE', 'ACTOR', 'ADMIT', 'ADOPT', 'AFTER', 'AGAIN', 'AGENT', 'AGREE', 'AHEAD', 'ALARM']
-  },
-  6: {
-    answers: ['PLANET', 'ROCKET', 'CASTLE', 'BRIDGE', 'SILVER', 'FOREST', 'GARDEN', 'ISLAND', 'JUNGLE', 'LEGEND'],
-    allowed: ['ACCEPT', 'ACCESS', 'ACROSS', 'ACTION', 'ACTIVE', 'ACTUAL', 'ADVICE', 'AFFECT', 'ALMOST', 'ALWAYS']
-  },
-  7: {
-    answers: ['DIAMOND', 'JOURNEY', 'KINGDOM', 'MYSTERY', 'THUNDER', 'VICTORY', 'FREEDOM', 'HARMONY', 'CAPTAIN'],
-    allowed: ['ABILITY', 'ABSENCE', 'ACADEMY', 'ACCOUNT', 'ACHIEVE', 'ACQUIRE', 'ADDRESS', 'ADVANCE', 'ALREADY']
+function normalizeWord(word, lang = 'en') {
+  if (!word || typeof word !== 'string') return '';
+  if (lang === 'ar') {
+    return word
+      .trim()
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+      .replace(/[أإآٱ]/g, 'ا');
   }
-};
-
-function loadEnglishDictionary() {
-  const jsonPath = path.join(__dirname, 'data', 'words-en.json');
-  if (fs.existsSync(jsonPath)) {
-    try {
-      const raw = fs.readFileSync(jsonPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      console.log('📚 Loaded expanded English dictionary from server/data/words-en.json');
-      return parsed;
-    } catch (err) {
-      console.warn('⚠️ Failed to parse words-en.json, using fallback dictionary:', err.message);
-    }
-  }
-  return FALLBACK_EN;
+  return word.trim().toUpperCase();
 }
 
 const DICTIONARIES = {
-  en: loadEnglishDictionary()
+  en: require('./data/words-en.json'),
+  ar: require('./data/words-ar.json')
 };
 
-// Build O(1) lookup Sets in memory at startup
-const VALID_SETS = {};
-for (const [lang, lengths] of Object.entries(DICTIONARIES)) {
-  VALID_SETS[lang] = {};
-  for (const [len, lists] of Object.entries(lengths)) {
-    const numLen = Number(len);
-    const cleanAnswers = (lists.answers || [])
-      .map(w => w.trim().toUpperCase())
-      .filter(w => w.length === numLen);
-    const cleanAllowed = (lists.allowed || [])
-      .map(w => w.trim().toUpperCase())
-      .filter(w => w.length === numLen);
-
-    lists.answers = cleanAnswers;
-    VALID_SETS[lang][numLen] = new Set([...cleanAnswers, ...cleanAllowed]);
+const VALID_SETS = { en: {}, ar: {} };
+for (const lang of SUPPORTED_LANGS) {
+  for (const len of SUPPORTED_LENGTHS) {
+    const answers = (DICTIONARIES[lang]?.[len]?.answers || []).map(w => normalizeWord(w, lang));
+    const allowed = (DICTIONARIES[lang]?.[len]?.allowed || []).map(w => normalizeWord(w, lang));
+    if (DICTIONARIES[lang]?.[len]) {
+      DICTIONARIES[lang][len].answers = answers;
+    }
+    const set = new Set([...answers, ...allowed]);
+    // في العربي: قبول الكلمة سواء انتهت بـ (ة) أو (ه) أو (ى) أو (ي) في التخمينات
+    if (lang === 'ar') {
+      for (const w of [...set]) {
+        if (w.endsWith('ه')) set.add(w.slice(0, -1) + 'ة');
+        if (w.endsWith('ة')) set.add(w.slice(0, -1) + 'ه');
+        if (w.endsWith('ى')) set.add(w.slice(0, -1) + 'ي');
+        if (w.endsWith('ي')) set.add(w.slice(0, -1) + 'ى');
+      }
+    }
+    VALID_SETS[lang][len] = set;
   }
 }
 
 function getSecretWord(wordLength = 5, lang = 'en', excludeWord = null) {
+  const safeLang = SUPPORTED_LANGS.includes(lang) ? lang : 'en';
   const len = Number(wordLength);
-  const langDict = DICTIONARIES[lang];
-  if (!langDict || !langDict[len] || langDict[len].answers.length === 0) {
-    throw new Error(`Unsupported word length (${len}) or language (${lang}).`);
+  const answers = DICTIONARIES[safeLang]?.[len]?.answers;
+  if (!answers || answers.length === 0) {
+    throw new Error(`Unsupported word length (${len}) or language (${safeLang})`);
   }
-
-  const answers = langDict[len].answers;
-  const candidates = excludeWord && answers.length > 1
+  const pool = excludeWord && answers.length > 1
     ? answers.filter(w => w !== excludeWord)
     : answers;
-
-  const randomIndex = crypto.randomInt(0, candidates.length);
-  return candidates[randomIndex];
+  return pool[crypto.randomInt(0, pool.length)];
 }
 
 function isValidWord(word, wordLength, lang = 'en') {
-  if (!word || typeof word !== 'string') return false;
-  const normalized = word.trim().toUpperCase();
+  const safeLang = SUPPORTED_LANGS.includes(lang) ? lang : 'en';
+  const normalized = normalizeWord(word, safeLang);
   if (normalized.length !== Number(wordLength)) return false;
-  if (!/^[A-Z]+$/.test(normalized)) return false;
 
-  const validSet = VALID_SETS[lang]?.[Number(wordLength)];
-  return validSet ? validSet.has(normalized) : false;
+  if (safeLang === 'ar') {
+    if (!/^[\u0621-\u064A]+$/.test(normalized)) return false;
+  } else {
+    if (!/^[A-Z]+$/.test(normalized)) return false;
+  }
+
+  return VALID_SETS[safeLang]?.[Number(wordLength)]?.has(normalized) || false;
+}
+
+function getDailyNumber(date = new Date()) {
+  const d = new Date(date);
+  const utcToday = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const anchor = Date.UTC(2025, 0, 1);
+  return Math.max(1, Math.floor((utcToday - anchor) / 86400000) + 1);
+}
+
+function getDailyWord(dayNumber, wordLength = 5, lang = 'en') {
+  const safeLang = SUPPORTED_LANGS.includes(lang) ? lang : 'en';
+  const len = SUPPORTED_LENGTHS.includes(Number(wordLength)) ? Number(wordLength) : 5;
+  const answers = DICTIONARIES[safeLang]?.[len]?.answers;
+  if (!answers || answers.length === 0) {
+    throw new Error(`Unsupported word length (${len}) or language (${safeLang})`);
+  }
+  const seedStr = `wordchill-daily-${dayNumber}-${safeLang}-${len}`;
+  const hash = crypto.createHash('sha256').update(seedStr).digest();
+  const index = hash.readUInt32BE(0) % answers.length;
+  return answers[index];
+}
+
+function createChallengePayload({ secretWord, lang = 'en', wordLength = 5, maxAttempts = 6, challengerName = 'Challenger', challengerScore = 4, dayNumber = null }) {
+  const payload = {
+    w: Buffer.from(secretWord, 'utf8').toString('base64'),
+    l: Number(wordLength),
+    lg: lang,
+    a: Number(maxAttempts),
+    cn: String(challengerName || 'Friend').slice(0, 20),
+    cs: Number(challengerScore) || 0,
+    d: dayNumber ? Number(dayNumber) : null,
+    t: Date.now()
+  };
+  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+function decodeChallengePayload(token) {
+  if (!token || typeof token !== 'string') return null;
+  try {
+    const raw = Buffer.from(token.trim(), 'base64url').toString('utf8');
+    const p = JSON.parse(raw);
+    if (!p.w || !p.l) return null;
+    const word = Buffer.from(p.w, 'base64').toString('utf8');
+    return {
+      secretWord: word,
+      wordLength: Number(p.l),
+      lang: p.lg || 'en',
+      maxAttempts: Number(p.a) || 6,
+      challengerName: p.cn || 'Challenger',
+      challengerScore: Number(p.cs) || 0,
+      dayNumber: p.d || null
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 module.exports = {
   getSecretWord,
+  getDailyWord,
+  getDailyNumber,
+  createChallengePayload,
+  decodeChallengePayload,
   isValidWord,
-  SUPPORTED_LENGTHS
+  normalizeWord,
+  SUPPORTED_LENGTHS,
+  SUPPORTED_LANGS
 };
+

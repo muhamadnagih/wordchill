@@ -1,5 +1,50 @@
 (() => {
-  const socket = io();
+  
+  // محاكي اتصال ذكي يعمل عبر HTTP ليتوافق مع Vercel Serverless بنسبة 100%
+  let roomStateListener = null;
+  const socket = {
+    on(event, cb) {
+      if (event === 'room:state') roomStateListener = cb;
+      if (event === 'connect') setTimeout(cb, 100);
+    },
+    async emit(event, payload, cb) {
+      const map = {
+        'room:create': '/api/mp/create',
+        'room:join': '/api/mp/join',
+        'room:start': '/api/mp/start',
+        'room:guess': '/api/mp/guess',
+        'room:new-round': '/api/mp/new-round',
+        'room:leave': '/api/mp/leave'
+      };
+      try {
+        const res = await fetch(map[event], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || {})
+        });
+        const data = await res.json();
+        cb?.(data);
+        if (data.room && roomStateListener && event !== 'room:create' && event !== 'room:join') {
+          roomStateListener(data.room);
+        }
+      } catch (err) {
+        cb?.({ error: 'Network error' });
+      }
+    }
+  };
+
+  setInterval(async () => {
+    const activeCode = localStorage.getItem('lexirush_active_room');
+    if (!activeCode || !roomStateListener) return;
+    try {
+      const res = await fetch(`/api/mp/state?code=${encodeURIComponent(activeCode)}&playerId=${encodeURIComponent(playerId)}`);
+      const data = await res.json();
+      if (data.ok && data.room) {
+        roomStateListener(data.room);
+      }
+    } catch (e) {}
+  }, 1300);
+
 
   let playerId = localStorage.getItem('lexirush_player_id');
   if (!playerId) {
@@ -13,11 +58,28 @@
     localStorage.setItem('lexirush_player_name', nameInput.value.trim() || 'Player');
   });
 
-  const FLIP_STEP_MS = 180; // Delay between each letter from left to right
-  const FLIP_DURATION_MS = 520; // Duration of single tile 3D flip
+  function updateAvatarDisplay(url) {
+    const avatarImg = document.getElementById('globalPlayerAvatar');
+    const emojiSpan = document.getElementById('globalAvatarEmoji');
+    if (avatarImg && url) {
+      avatarImg.src = url;
+      avatarImg.classList.remove('hidden');
+      if (emojiSpan) emojiSpan.classList.add('hidden');
+    } else if (emojiSpan) {
+      emojiSpan.classList.remove('hidden');
+      if (avatarImg) avatarImg.classList.add('hidden');
+    }
+  }
+
+  const FLIP_STEP_MS = 180;
+  const FLIP_DURATION_MS = 520;
 
   const state = {
     mode: null,
+    soloLang: 'en',
+    dailyLang: 'en',
+    createLang: 'en',
+    lang: 'en',
     soloWordLength: 5,
     createWordLength: 5,
     wordLength: 5,
@@ -28,8 +90,100 @@
     bounceRowIndex: -1,
     knownGuessCount: 0,
     soloSession: null,
-    room: null
+    room: null,
+    lastCardDataUrl: null,
+    lastChallengeToken: null,
+    cachedAvatarDataUri: null  // Cached base64 avatar from proxy
   };
+
+  // ==================== DAILY CHALLENGE PERSISTENCE ====================
+  function getEffectiveUserId() {
+    // Prefer Discord user ID if authenticated, else persistent guest ID
+    const storedId = localStorage.getItem('lexirush_player_id') || '';
+    if (storedId.startsWith('discord_')) return storedId;
+    // Ensure a stable guest ID exists
+    let guestId = localStorage.getItem('wordchill_guest_id');
+    if (!guestId) {
+      guestId = 'guest_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+      localStorage.setItem('wordchill_guest_id', guestId);
+    }
+    return guestId;
+  }
+
+  function getDailyStateKey(dayNumber, lang) {
+    const uid = getEffectiveUserId();
+    return `wordchill_daily_${dayNumber}_${lang}_${uid}`;
+  }
+
+  function saveDailyProgress(dayNumber, lang, sessionData) {
+    if (!dayNumber) return;
+    const key = getDailyStateKey(dayNumber, lang);
+    const saved = {
+      sessionId: sessionData.sessionId,
+      guesses: sessionData.guesses,
+      status: sessionData.status,
+      lang: sessionData.lang,
+      wordLength: sessionData.wordLength,
+      maxAttempts: sessionData.maxAttempts,
+      dayNumber: sessionData.dayNumber,
+      modeType: sessionData.modeType,
+      challenger: sessionData.challenger,
+      secretWord: sessionData.secretWord || null,
+      completed: sessionData.status === 'WON' || sessionData.status === 'LOST'
+    };
+    localStorage.setItem(key, JSON.stringify(saved));
+  }
+
+  function loadDailyProgress(dayNumber, lang) {
+    if (!dayNumber) return null;
+    const key = getDailyStateKey(dayNumber, lang);
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { return null; }
+  }
+
+  function isDailyCompleted(dayNumber, lang) {
+    const saved = loadDailyProgress(dayNumber, lang);
+    return saved?.completed === true;
+  }
+
+  function markDailyCompleted(dayNumber, lang) {
+    const saved = loadDailyProgress(dayNumber, lang);
+    if (saved) {
+      saved.completed = true;
+      const key = getDailyStateKey(dayNumber, lang);
+      localStorage.setItem(key, JSON.stringify(saved));
+    }
+  }
+
+  function updateDailyButtonState() {
+    const btn = document.getElementById('playDailyBtn');
+    if (!btn || !dailyInfo) return;
+    const dayNum = dailyInfo.dayNumber;
+    const lang = state.dailyLang;
+    const completed = isDailyCompleted(dayNum, lang);
+
+    if (completed) {
+      btn.innerHTML = '<span>✅ Completed - View Result</span>';
+      btn.classList.add('daily-completed');
+      btn.dataset.completed = 'true';
+    } else {
+      btn.innerHTML = '<span>📅 PLAY TODAY\'S WORD</span>';
+      btn.classList.remove('daily-completed');
+      btn.dataset.completed = 'false';
+    }
+  }
+
+  function normalizeInputChar(rawKey, lang) {
+    if (lang === 'ar') {
+      const cleaned = rawKey.replace(/[\u064B-\u065F\u0670\u0640]/g, '').replace(/[أإآٱ]/g, 'ا');
+      return /^[\u0621-\u064A]$/.test(cleaned) ? cleaned : null;
+    }
+    const upper = rawKey.toUpperCase();
+    return /^[A-Z]$/.test(upper) ? upper : null;
+  }
 
   const screens = {
     menu: document.getElementById('screen-menu'),
@@ -49,11 +203,12 @@
 
   function showToast(msg) {
     const container = document.getElementById('toastContainer');
+    container.innerHTML = '';
     const toast = document.createElement('div');
     toast.className = 'toast';
     toast.textContent = msg;
     container.appendChild(toast);
-    setTimeout(() => toast.remove(), 2800);
+    setTimeout(() => toast.remove(), 1900);
   }
 
   document.getElementById('themeToggleBtn').addEventListener('click', () => {
@@ -61,6 +216,15 @@
     const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     html.setAttribute('data-theme', next);
     document.getElementById('themeToggleBtn').textContent = next === 'dark' ? '☀️' : '🌙';
+  });
+
+  // Solo Language & Length Selectors
+  document.querySelectorAll('#soloLangGroup .pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#soloLangGroup .pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.soloLang = btn.dataset.lang;
+    });
   });
 
   document.querySelectorAll('#soloLengthGroup .pill').forEach(btn => {
@@ -74,9 +238,19 @@
   function updateCreatePreview() {
     const maxP = document.getElementById('maxPlayersSelect').value;
     const maxA = document.getElementById('maxAttemptsSelect').value;
+    const langLabel = state.createLang === 'ar' ? '🇪🇬 عربي' : '🇬🇧 EN';
     document.getElementById('configPreviewText').textContent =
-      `${state.createWordLength}-Letter Word • Max ${maxP} Players • ${maxA} Attempts`;
+      `${langLabel} • ${state.createWordLength} Letters • Max ${maxP} Players • ${maxA} Tries`;
   }
+
+  document.querySelectorAll('#createLangGroup .pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#createLangGroup .pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.createLang = btn.dataset.lang;
+      updateCreatePreview();
+    });
+  });
 
   document.querySelectorAll('#createLengthGroup .pill').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -115,18 +289,76 @@
     }, totalFlipTime);
   }
 
-  async function startSoloGame() {
+  async function startSoloGame({ isDaily = false, challenge = null, lang = null, wordLength = null } = {}) {
     try {
+      const targetLang = lang || (isDaily ? state.dailyLang : state.soloLang);
+      const targetLen = wordLength || (isDaily ? 5 : state.soloWordLength);
+
+      // ===== DAILY CHALLENGE: CHECK COMPLETION / RESUME =====
+      if (isDaily && dailyInfo) {
+        const dayNum = dailyInfo.dayNumber;
+        const savedProgress = loadDailyProgress(dayNum, targetLang);
+
+        if (savedProgress?.completed) {
+          // Already completed: show result modal instead of starting game
+          showDailyResultModal(savedProgress);
+          return;
+        }
+
+        if (savedProgress && !savedProgress.completed && savedProgress.sessionId) {
+          // Mid-game resume: restore board state
+          state.mode = 'SOLO';
+          state.soloSession = savedProgress;
+          state.lang = savedProgress.lang || 'en';
+          state.wordLength = savedProgress.wordLength;
+          state.maxAttempts = savedProgress.maxAttempts;
+          state.currentGuess = '';
+          state.animatingRowIndex = -1;
+          state.bounceRowIndex = -1;
+          state.knownGuessCount = savedProgress.guesses?.length || 0;
+          state.isSubmitting = false;
+          state.lastCardDataUrl = null;
+          state.lastChallengeToken = null;
+
+          document.querySelector('.game-layout').classList.add('solo-only');
+          document.getElementById('mpLiveSidebar').classList.add('hidden');
+          document.getElementById('soloEndBanner').classList.add('hidden');
+
+          const isAr = state.lang === 'ar';
+          const activeBar = document.getElementById('activeChallengeBanner');
+          const activeText = document.getElementById('activeChallengeText');
+          activeBar?.classList.remove('hidden');
+          if (activeText) {
+            activeText.textContent = isAr
+              ? `📅 اللغز اليومي رقم #${dayNum} — نفس الكلمة لكل اللاعبين اليوم!`
+              : `📅 WordChill Daily No. ${dayNum} — The exact same secret word for all players today!`;
+          }
+          document.getElementById('gameModeBadge').textContent = `📅 DAILY #${dayNum}`;
+
+          renderActiveGame();
+          showScreen('game');
+          showToast(isAr ? 'تم استعادة تقدمك!' : 'Resumed your progress!');
+          return;
+        }
+      }
+
       const res = await fetch('/api/solo/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wordLength: state.soloWordLength, maxAttempts: 6 })
+        body: JSON.stringify({
+          wordLength: targetLen,
+          maxAttempts: 6,
+          lang: targetLang,
+          isDaily: Boolean(isDaily),
+          challenge: challenge || null
+        })
       });
       const data = await res.json();
-      if (!data.ok) return showToast(data.error || 'Could not start solo game.');
+      if (!data.ok) return showToast(data.error || 'Could not start game.');
 
       state.mode = 'SOLO';
       state.soloSession = data.session;
+      state.lang = data.session.lang || 'en';
       state.wordLength = data.session.wordLength;
       state.maxAttempts = data.session.maxAttempts;
       state.currentGuess = '';
@@ -134,21 +366,95 @@
       state.bounceRowIndex = -1;
       state.knownGuessCount = 0;
       state.isSubmitting = false;
+      state.lastCardDataUrl = null;
+      state.lastChallengeToken = challenge || null;
+
+      // Save initial daily progress for mid-game resume
+      if (isDaily && data.session.dayNumber) {
+        saveDailyProgress(data.session.dayNumber, data.session.lang, data.session);
+      }
 
       document.querySelector('.game-layout').classList.add('solo-only');
       document.getElementById('mpLiveSidebar').classList.add('hidden');
       document.getElementById('soloEndBanner').classList.add('hidden');
-      document.getElementById('gameModeBadge').textContent = 'SOLO MODE';
+
+      const isAr = state.lang === 'ar';
+      const activeBar = document.getElementById('activeChallengeBanner');
+      const activeText = document.getElementById('activeChallengeText');
+
+      if (challenge && data.session.challenger) {
+        activeBar?.classList.remove('hidden');
+        if (activeText) {
+          activeText.textContent = isAr
+            ? `⚔️ تحدي من @${data.session.challenger.name} — الهدف: حل الكلمة في أقل من ${data.session.challenger.score} محاولات!`
+            : `⚔️ Challenge from @${data.session.challenger.name} — Target: Beat ${data.session.challenger.score}/${data.session.challenger.attempts}!`;
+        }
+        document.getElementById('gameModeBadge').textContent = isAr ? '⚔️ وضع التحدي' : '⚔️ CHALLENGE';
+      } else if (isDaily || data.session.dayNumber) {
+        activeBar?.classList.remove('hidden');
+        const dayNum = data.session.dayNumber || (dailyInfo ? dailyInfo.dayNumber : '');
+        if (activeText) {
+          activeText.textContent = isAr
+            ? `📅 اللغز اليومي رقم #${dayNum} — نفس الكلمة لكل اللاعبين اليوم!`
+            : `📅 WordChill Daily No. ${dayNum} — The exact same secret word for all players today!`;
+        }
+        document.getElementById('gameModeBadge').textContent = `📅 DAILY #${dayNum}`;
+      } else {
+        activeBar?.classList.add('hidden');
+        document.getElementById('gameModeBadge').textContent =
+          isAr ? '🇪🇬 فردي (عربي)' : '🇬🇧 SOLO MODE';
+      }
 
       renderActiveGame();
       showScreen('game');
     } catch (err) {
-      showToast('Network error starting Solo game.');
+      showToast('Network error starting game.');
     }
   }
 
-  document.getElementById('playSoloBtn').addEventListener('click', startSoloGame);
-  document.getElementById('soloPlayAgainBtn').addEventListener('click', startSoloGame);
+  function showDailyResultModal(savedProgress) {
+    // Show the result as a read-only view (no re-play)
+    state.mode = 'SOLO';
+    state.soloSession = savedProgress;
+    state.lang = savedProgress.lang || 'en';
+    state.wordLength = savedProgress.wordLength;
+    state.maxAttempts = savedProgress.maxAttempts;
+    state.currentGuess = '';
+    state.animatingRowIndex = -1;
+    state.bounceRowIndex = -1;
+    state.knownGuessCount = savedProgress.guesses?.length || 0;
+    state.isSubmitting = false;
+
+    document.querySelector('.game-layout').classList.add('solo-only');
+    document.getElementById('mpLiveSidebar').classList.add('hidden');
+
+    const isAr = state.lang === 'ar';
+    const dayNum = savedProgress.dayNumber;
+    const activeBar = document.getElementById('activeChallengeBanner');
+    const activeText = document.getElementById('activeChallengeText');
+    activeBar?.classList.remove('hidden');
+    if (activeText) {
+      activeText.textContent = isAr
+        ? `📅 اللغز اليومي رقم #${dayNum} — لقد لعبت اليوم بالفعل!`
+        : `📅 WordChill Daily No. ${dayNum} — You already played today!`;
+    }
+    document.getElementById('gameModeBadge').textContent = `📅 DAILY #${dayNum}`;
+
+    renderActiveGame();
+    showScreen('game');
+    showToast(isAr ? 'لقد لعبت اليوم بالفعل! هذه نتيجتك.' : 'You already played today! Viewing your result.');
+  }
+
+  document.getElementById('playSoloBtn').addEventListener('click', () => startSoloGame());
+  document.getElementById('soloPlayAgainBtn').addEventListener('click', () => {
+    if (state.lastChallengeToken) {
+      startSoloGame({ challenge: state.lastChallengeToken });
+    } else if (state.soloSession?.isDaily || state.soloSession?.dayNumber) {
+      startSoloGame({ isDaily: true, lang: state.lang });
+    } else {
+      startSoloGame();
+    }
+  });
   document.getElementById('soloBackMenuBtn').addEventListener('click', () => showScreen('menu'));
 
   document.getElementById('openCreateRoomBtn').addEventListener('click', () => {
@@ -163,6 +469,7 @@
       playerId,
       playerName: nameInput.value.trim() || 'Player',
       roomName: document.getElementById('roomNameInput').value.trim(),
+      lang: state.createLang,
       wordLength: state.createWordLength,
       maxPlayers: Number(document.getElementById('maxPlayersSelect').value),
       maxAttempts: Number(document.getElementById('maxAttemptsSelect').value),
@@ -173,6 +480,7 @@
       if (res?.error) return showToast(res.error);
       state.mode = 'MP';
       state.room = res.room;
+      state.lang = res.room.lang || 'en';
       state.knownGuessCount = 0;
       localStorage.setItem('lexirush_active_room', res.room.code);
       renderRoomState(res.room);
@@ -194,6 +502,7 @@
       }
       state.mode = 'MP';
       state.room = res.room;
+      state.lang = res.room.lang || 'en';
       const me = res.room.players.find(p => p.id === playerId);
       state.knownGuessCount = me ? me.guesses.length : 0;
       localStorage.setItem('lexirush_active_room', res.room.code);
@@ -245,6 +554,7 @@
     const previousRound = state.room?.roundNumber;
     state.mode = 'MP';
     state.room = roomState;
+    state.lang = roomState.lang || 'en';
 
     if (
       (previousStatus !== 'IN_PROGRESS' && roomState.status === 'IN_PROGRESS') ||
@@ -260,7 +570,6 @@
     const me = roomState.players.find(p => p.id === playerId);
     const myGuessesLen = me ? me.guesses.length : 0;
 
-    // If the player just submitted a new guess in MP, animate that row before switching to results
     if (myGuessesLen > state.knownGuessCount) {
       const newRowIdx = myGuessesLen - 1;
       state.knownGuessCount = myGuessesLen;
@@ -280,7 +589,6 @@
       return;
     }
 
-    // If round finished while we weren't mid-animation, show results
     if (roomState.status === 'FINISHED' && state.animatingRowIndex === -1 && state.bounceRowIndex === -1) {
       renderResultsScreen(roomState);
       showScreen('results');
@@ -300,13 +608,15 @@
   function renderRoomState(room) {
     state.wordLength = room.wordLength;
     state.maxAttempts = room.maxAttempts;
+    state.lang = room.lang || 'en';
+    const langFlag = state.lang === 'ar' ? '🇪🇬 عربي' : '🇬🇧 English';
 
     if (room.status === 'WAITING') {
       document.getElementById('lobbyRoomName').textContent = room.name;
       document.getElementById('lobbyRoomCode').textContent = room.code;
-      document.getElementById('lobbyWordLenBadge').textContent = `${room.wordLength} Letters`;
-      document.getElementById('lobbyAttemptsBadge').textContent = `${room.maxAttempts} Attempts`;
-      document.getElementById('lobbyCapacityBadge').textContent = `${room.players.length} / ${room.maxPlayers} Players`;
+      document.getElementById('lobbyWordLenBadge').textContent = `${langFlag} • ${room.wordLength} Letters`;
+      document.getElementById('lobbyAttemptsBadge').textContent = `🎯 ${room.maxAttempts} Attempts`;
+      document.getElementById('lobbyCapacityBadge').textContent = `👥 ${room.players.length} / ${room.maxPlayers} Players`;
 
       const grid = document.getElementById('lobbyPlayersGrid');
       grid.innerHTML = '';
@@ -333,17 +643,17 @@
       startBtn.disabled = !canStart;
       document.getElementById('lobbyWaitHint').textContent =
         room.players.length < 2
-          ? 'Waiting for at least 2 players to start...'
+          ? 'Need at least 2 players to start...'
           : isHost
           ? 'Ready to launch!'
-          : 'Waiting for host to start the match...';
+          : 'Waiting for host to start...';
 
       showScreen('lobby');
     } else if (room.status === 'IN_PROGRESS') {
       document.querySelector('.game-layout').classList.remove('solo-only');
       document.getElementById('mpLiveSidebar').classList.remove('hidden');
       document.getElementById('soloEndBanner').classList.add('hidden');
-      document.getElementById('gameModeBadge').textContent = `ROOM #${room.code} • ROUND ${room.roundNumber}`;
+      document.getElementById('gameModeBadge').textContent = `${langFlag} • ROOM #${room.code} • R${room.roundNumber}`;
       document.getElementById('sidebarRoomCode').textContent = `#${room.code}`;
 
       if (state.animatingRowIndex === -1 && state.bounceRowIndex === -1) {
@@ -358,6 +668,7 @@
   }
 
   function renderActiveGame() {
+    const isAr = state.lang === 'ar';
     const guesses = state.mode === 'SOLO'
       ? state.soloSession.guesses
       : (state.room.players.find(p => p.id === playerId)?.guesses || []);
@@ -370,12 +681,18 @@
     const isAnimating = state.animatingRowIndex !== -1 || state.bounceRowIndex !== -1;
     const remaining = Math.max(0, state.maxAttempts - guesses.length);
 
-    document.getElementById('gameRuleInfo').textContent = `${state.wordLength} Letters • ${state.maxAttempts} Tries`;
+    document.getElementById('gameRuleInfo').textContent = isAr
+      ? `${state.wordLength} حروف • ${state.maxAttempts} محاولات`
+      : `${state.wordLength} Letters • ${state.maxAttempts} Tries`;
+
     document.getElementById('remainingTriesText').textContent =
-      isStillPlaying || isAnimating ? `${remaining} attempts remaining` : `Status: ${myStatus}`;
+      isStillPlaying || isAnimating
+        ? (isAr ? `متبقي ${remaining} محاولات` : `${remaining} tries left`)
+        : `Status: ${myStatus}`;
 
     const gridEl = document.getElementById('wordGrid');
     gridEl.style.setProperty('--word-length', state.wordLength);
+    gridEl.classList.toggle('rtl-grid', isAr);
     gridEl.innerHTML = '';
 
     for (let r = 0; r < state.maxAttempts; r++) {
@@ -396,7 +713,6 @@
           tile.textContent = cell.letter;
           tile.classList.add(cell.state);
 
-          // Apply staggered left-to-right 3D flip only on the newly submitted row
           if (r === state.animatingRowIndex) {
             tile.classList.add('revealing');
             tile.style.setProperty('--flip-delay', `${c * FLIP_STEP_MS}ms`);
@@ -416,18 +732,47 @@
       gridEl.appendChild(rowEl);
     }
 
-    // Only show Solo End Banner AFTER the flip & bounce animation completes
     if (state.mode === 'SOLO' && !isStillPlaying && !isAnimating) {
       const banner = document.getElementById('soloEndBanner');
       banner.classList.remove('hidden');
-      const iconEl = document.getElementById('soloEndIcon'); if (iconEl) iconEl.textContent = myStatus === 'WON' ? '🏆' : '🧊';
+      const iconEl = document.getElementById('soloEndIcon');
+      if (iconEl) iconEl.textContent = myStatus === 'WON' ? '🏆' : '🧊';
       document.getElementById('soloEndTitle').textContent =
-        myStatus === 'WON' ? '🎉 Brilliant! You Solved It!' : 'Out of Attempts!';
-      document.getElementById('soloEndSecret').innerHTML =
-        `The secret word was <strong>${state.soloSession.secretWord}</strong>`;
+        myStatus === 'WON'
+          ? (isAr ? '🎉 عبقري! حليت الكلمة!' : '🎉 Brilliant! You Solved It!')
+          : (isAr ? 'انتهت المحاولات!' : 'Out of Attempts!');
+      document.getElementById('soloEndSecret').innerHTML = isAr
+        ? `الكلمة السرية كانت <strong>${state.soloSession.secretWord}</strong>`
+        : `The secret word was <strong>${state.soloSession.secretWord}</strong>`;
+
+      const compEl = document.getElementById('soloChallengeComparison');
+      if (compEl && state.soloSession?.challenger) {
+        compEl.classList.remove('hidden');
+        const ch = state.soloSession.challenger;
+        const myScore = state.soloSession.guesses.length;
+        if (myStatus === 'WON' && myScore < ch.score) {
+          compEl.textContent = isAr
+            ? `🔥 كسبت التحدي! (${myScore}/${state.maxAttempts} ضد ${ch.score}/${ch.attempts})`
+            : `🔥 You beat @${ch.name}! (${myScore}/${state.maxAttempts} vs ${ch.score}/${ch.attempts})`;
+          compEl.style.color = '#10B981';
+        } else if (myStatus === 'WON' && myScore === ch.score) {
+          compEl.textContent = isAr
+            ? `🤝 تعادل مع @${ch.name}! (${myScore}/${state.maxAttempts})`
+            : `🤝 Tied with @${ch.name}! (${myScore}/${state.maxAttempts})`;
+          compEl.style.color = '#38BDF8';
+        } else {
+          compEl.textContent = isAr
+            ? `💀 فاز @${ch.name} في التحدي (${ch.score}/${ch.attempts})`
+            : `💀 @${ch.name} won this challenge (${ch.score}/${ch.attempts})`;
+          compEl.style.color = '#F46036';
+        }
+      } else if (compEl) {
+        compEl.classList.add('hidden');
+      }
+
+      displayDiscordCardPreview();
     }
 
-    // Exclude currently flipping row from keyboard colors until flip completes!
     const keyboardGuesses = state.animatingRowIndex !== -1
       ? guesses.slice(0, state.animatingRowIndex)
       : guesses;
@@ -435,6 +780,7 @@
   }
 
   function renderKeyboard(guesses) {
+    const isAr = state.lang === 'ar';
     const keyPrecedence = { correct: 3, present: 2, absent: 1 };
     const keyStates = {};
 
@@ -447,13 +793,20 @@
       });
     });
 
-    const rows = [
-      ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
-      ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
-      ['ENTER', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '⌫']
-    ];
+    const rows = isAr
+      ? [
+          ['ض', 'ص', 'ث', 'ق', 'ف', 'غ', 'ع', 'ه', 'خ', 'ح', 'ج', 'د'],
+          ['ش', 'س', 'ي', 'ب', 'ل', 'ا', 'ت', 'ن', 'م', 'ك', 'ط', 'ذ'],
+          ['ENTER', 'ئ', 'ء', 'ؤ', 'ر', 'ى', 'ة', 'و', 'ز', 'ظ', '⌫']
+        ]
+      : [
+          ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+          ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+          ['ENTER', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '⌫']
+        ];
 
     const kbEl = document.getElementById('keyboard');
+    kbEl.classList.toggle('ar-keyboard', isAr);
     kbEl.innerHTML = '';
 
     rows.forEach(rowKeys => {
@@ -465,7 +818,7 @@
         btn.className = 'kb-key';
         if (k === 'ENTER' || k === '⌫') btn.classList.add('wide');
         if (keyStates[k]) btn.classList.add(keyStates[k]);
-        btn.textContent = k;
+        btn.textContent = k === 'ENTER' && isAr ? 'إدخال' : k;
         btn.addEventListener('click', () => handleKeyInput(k));
         rowEl.appendChild(btn);
       });
@@ -475,6 +828,7 @@
   }
 
   function renderLiveOpponents(room) {
+    const isAr = room.lang === 'ar';
     const container = document.getElementById('liveOpponentsList');
     container.innerHTML = '';
 
@@ -503,7 +857,7 @@
           <span>${p.name} ${p.id === playerId ? '(You)' : ''}</span>
           <span>${statusBadge}</span>
         </div>
-        <div class="mini-grid">${miniRowsHtml || '<small style="color:var(--text-muted)">No guesses yet</small>'}</div>
+        <div class="mini-grid ${isAr ? 'rtl-grid' : ''}">${miniRowsHtml || '<small style="color:var(--text-muted)">No guesses yet</small>'}</div>
       `;
       container.appendChild(card);
     });
@@ -540,6 +894,8 @@
     } else {
       newRoundBtn.classList.add('hidden');
     }
+
+    displayMpDiscordCardPreview(room);
   }
 
   async function handleKeyInput(key) {
@@ -560,14 +916,19 @@
     if (key === 'ENTER') {
       if (state.currentGuess.length !== state.wordLength) {
         shakeActiveRow();
-        return showToast(`Word must be ${state.wordLength} letters!`);
+        return showToast(
+          state.lang === 'ar'
+            ? `الكلمة يجب أن تكون ${state.wordLength} حروف!`
+            : `Word must be ${state.wordLength} letters!`
+        );
       }
       await submitCurrentGuess();
       return;
     }
 
-    if (/^[A-Z]$/.test(key) && state.currentGuess.length < state.wordLength) {
-      state.currentGuess += key;
+    const validChar = normalizeInputChar(key, state.lang);
+    if (validChar && state.currentGuess.length < state.wordLength) {
+      state.currentGuess += validChar;
       renderActiveGame();
     }
   }
@@ -605,6 +966,17 @@
           state.currentGuess = '';
           const newRowIdx = state.soloSession.guesses.length - 1;
           const isWon = state.soloSession.status === 'WON';
+          const isLost = state.soloSession.status === 'LOST';
+
+          // ===== DAILY PROGRESS: save on every guess =====
+          if (state.soloSession.dayNumber || state.soloSession.modeType === 'DAILY') {
+            saveDailyProgress(state.soloSession.dayNumber, state.soloSession.lang, state.soloSession);
+            if (isWon || isLost) {
+              markDailyCompleted(state.soloSession.dayNumber, state.soloSession.lang);
+              updateDailyButtonState();
+            }
+          }
+
           triggerRowFlipAnimation(newRowIdx, isWon);
         }
       } else if (state.mode === 'MP' && state.room) {
@@ -630,10 +1002,18 @@
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.activeElement.tagName === 'INPUT') return;
-    const key = e.key.toUpperCase();
-    if (key === 'ENTER' || key === 'BACKSPACE' || /^[A-Z]$/.test(key)) {
+    if (e.key === 'Enter') {
       e.preventDefault();
-      handleKeyInput(key);
+      handleKeyInput('ENTER');
+    } else if (e.key === 'Backspace') {
+      e.preventDefault();
+      handleKeyInput('BACKSPACE');
+    } else if (e.key.length === 1) {
+      const validChar = normalizeInputChar(e.key, state.lang);
+      if (validChar) {
+        e.preventDefault();
+        handleKeyInput(validChar);
+      }
     }
   });
 
@@ -643,21 +1023,22 @@
       const data = await res.json();
       const container = document.getElementById('publicRoomsList');
       if (!data.rooms || data.rooms.length === 0) {
-        container.innerHTML = '<p class="muted-text">No open lobbies right now. Create one above!</p>';
+        container.innerHTML = '<p class="muted-text">No public rooms waiting right now. Host one above!</p>';
         return;
       }
       container.innerHTML = '';
       data.rooms.forEach(r => {
+        const langBadge = r.lang === 'ar' ? '🇪🇬 عربي' : '🇬🇧 EN';
         const item = document.createElement('div');
         item.className = 'public-room-item';
         item.innerHTML = `
           <div>
             <strong>${r.name}</strong>
             <span style="font-size:0.8rem;color:var(--text-muted);margin-left:8px;">
-              ${r.wordLength} Letters • ${r.playerCount}/${r.maxPlayers} Players
+              ${langBadge} • ${r.wordLength} Letters • ${r.playerCount}/${r.maxPlayers} Players
             </span>
           </div>
-          <button class="btn btn-secondary btn-sm" data-code="${r.code}">Join #${r.code}</button>
+          <button class="btn-chip" data-code="${r.code}">Join #${r.code}</button>
         `;
         item.querySelector('button').addEventListener('click', () => joinRoomByCode(r.code));
         container.appendChild(item);
@@ -666,9 +1047,7 @@
   }
 
   document.getElementById('refreshPublicRoomsBtn').addEventListener('click', fetchPublicRooms);
-  fetchPublicRooms();
 
-  // How to Play Modal Hooks
   const howToModal = document.getElementById('howToModal');
   document.getElementById('howToPlayModalBtn')?.addEventListener('click', () => {
     howToModal?.classList.remove('hidden');
@@ -686,4 +1065,514 @@
       showScreen('menu');
     }
   });
+
+  // ==================== DISCORD EMBEDDED SDK & SOCIAL SYSTEM ====================
+  let discordSdk = null;
+  let discordAuth = null;
+  let dailyInfo = null;
+
+  async function initDiscordSdk() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const isEmbedded = urlParams.has('frame_id') || window.parent !== window;
+
+    const dotEl = document.getElementById('discordStatusDot');
+    const titleEl = document.getElementById('discordStatusTitle');
+    const descEl = document.getElementById('discordStatusDesc');
+
+    const savedAvatar = localStorage.getItem('wordchill_discord_avatar');
+    if (savedAvatar) updateAvatarDisplay(savedAvatar);
+
+    try {
+      const sdkModule = await import('https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@2.5.0/output/index.mjs')
+        .catch(() => null);
+
+      if (sdkModule && isEmbedded) {
+        const clientId = '1562771601764651109';
+        discordSdk = new sdkModule.DiscordSDK(clientId);
+        await discordSdk.ready();
+
+        const { code } = await discordSdk.commands.authorize({
+          client_id: clientId,
+          response_type: 'code',
+          state: '',
+          prompt: 'none',
+          scope: ['identify', 'guilds']
+        }).catch(() => ({ code: null }));
+
+        if (code) {
+          const tokenRes = await fetch('/api/discord/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code })
+          });
+          const tokenData = await tokenRes.json();
+          if (tokenData.ok && tokenData.access_token) {
+            discordAuth = await discordSdk.commands.authenticate({
+              access_token: tokenData.access_token
+            }).catch(() => null);
+          }
+        }
+
+        if (discordAuth?.user) {
+          const u = discordAuth.user;
+          const dName = u.global_name || u.username;
+          playerId = 'discord_' + u.id;
+          localStorage.setItem('lexirush_player_id', playerId);
+          nameInput.value = dName;
+          localStorage.setItem('lexirush_player_name', dName);
+
+          const avatarUrl = u.avatar
+            ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=256`
+            : `https://cdn.discordapp.com/embed/avatars/${(BigInt(u.id || 0) >> 22n) % 6n}.png`;
+          localStorage.setItem('wordchill_discord_avatar', avatarUrl);
+          updateAvatarDisplay(avatarUrl);
+        }
+
+        if (dotEl) dotEl.style.background = '#10B981';
+        if (titleEl) titleEl.textContent = 'Discord Activity Connected! 🎮';
+        if (descEl) descEl.textContent = 'User profile & channel synchronized with Discord.';
+        return;
+      }
+    } catch (err) {
+      console.warn('Discord SDK init note:', err);
+    }
+
+    if (dotEl) dotEl.style.background = '#38BDF8';
+    if (titleEl) titleEl.textContent = 'Standalone Web Mode (Webhooks Ready)';
+    if (descEl) descEl.textContent = 'Running in browser. You can link your Discord server channel via Webhook.';
+  }
+
+  // ==================== DAILY SEED & COUNTDOWN ====================
+  async function fetchDailyInfo() {
+    try {
+      const res = await fetch('/api/daily/info');
+      const data = await res.json();
+      if (data.ok) {
+        dailyInfo = data;
+        const numEl = document.getElementById('dailyHeaderNum');
+        if (numEl) numEl.textContent = data.dayNumber;
+        const datePill = document.getElementById('dailyDatePill');
+        if (datePill) datePill.textContent = `UTC ${data.dateStr}`;
+
+        startDailyCountdown(data.msUntilNext);
+      }
+    } catch (e) {}
+  }
+
+  function startDailyCountdown(initialMs) {
+    let remaining = initialMs;
+    function update() {
+      remaining = Math.max(0, remaining - 1000);
+      const hrs = Math.floor(remaining / 3600000).toString().padStart(2, '0');
+      const mins = Math.floor((remaining % 3600000) / 60000).toString().padStart(2, '0');
+      const secs = Math.floor((remaining % 60000) / 1000).toString().padStart(2, '0');
+      const el = document.getElementById('dailyCountdownText');
+      if (el) el.textContent = `${hrs}:${mins}:${secs}`;
+    }
+    update();
+    setInterval(update, 1000);
+  }
+
+  document.querySelectorAll('#dailyLangGroup .pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#dailyLangGroup .pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.dailyLang = btn.dataset.lang;
+      updateDailyButtonState();
+    });
+  });
+
+  document.getElementById('playDailyBtn')?.addEventListener('click', () => {
+    startSoloGame({ isDaily: true, lang: state.dailyLang });
+  });
+
+  // ==================== CANVAS RESULT CARD GENERATOR ====================
+  // Fetch avatar via backend proxy to bypass CORS/CSP
+  async function fetchAvatarViaProxy(url) {
+    if (!url) return null;
+    // If already a data URI, return as-is
+    if (url.startsWith('data:')) return url;
+    // Use cached version if available
+    if (state.cachedAvatarDataUri) return state.cachedAvatarDataUri;
+    try {
+      const res = await fetch(`/api/avatar-proxy?url=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      if (data.ok && data.dataUri) {
+        state.cachedAvatarDataUri = data.dataUri;
+        return data.dataUri;
+      }
+    } catch (e) {
+      console.warn('Avatar proxy fetch failed:', e);
+    }
+    return null;
+  }
+
+  function loadAvatarImg(url) {
+    return new Promise((resolve) => {
+      if (!url) return resolve(null);
+      const img = new Image();
+      // No crossOrigin needed when using data URIs from our proxy
+      if (!url.startsWith('data:')) {
+        img.crossOrigin = 'anonymous';
+      }
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  async function generateDiscordResultCard({ guesses, wordLength, maxAttempts, lang, playerName, dayNumber, isDaily, solved, avatarUrl }) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 680;
+    canvas.height = 400;
+    const ctx = canvas.getContext('2d');
+
+    roundRect(ctx, 0, 0, canvas.width, canvas.height, 24);
+    ctx.fillStyle = '#141518';
+    ctx.fill();
+
+    const titleText = dayNumber
+      ? `WordChill No. ${dayNumber}`
+      : 'WordChill Challenge';
+    ctx.fillStyle = '#E3E5E8';
+    ctx.font = 'bold 22px "Plus Jakarta Sans", Cairo, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(titleText, canvas.width / 2, 48);
+
+    const boxX = 115, boxY = 75, boxW = 450, boxH = 265;
+    roundRect(ctx, boxX, boxY, boxW, boxH, 22);
+    ctx.fillStyle = '#1B1C20';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#2B2D33';
+    ctx.stroke();
+
+    const avatarCenterX = boxX + 110;
+    const avatarCenterY = boxY + boxH / 2 - 12;
+    const avatarRadius = 68;
+    // Use the passed avatarUrl (already proxied to data URI) instead of direct localStorage
+    const resolvedAvatarUrl = avatarUrl || '';
+    const avatarImg = await loadAvatarImg(resolvedAvatarUrl);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(avatarCenterX, avatarCenterY, avatarRadius, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+
+    if (avatarImg) {
+      ctx.drawImage(avatarImg, avatarCenterX - avatarRadius, avatarCenterY - avatarRadius, avatarRadius * 2, avatarRadius * 2);
+    } else {
+      const grad = ctx.createLinearGradient(avatarCenterX - avatarRadius, avatarCenterY - avatarRadius, avatarCenterX + avatarRadius, avatarCenterY + avatarRadius);
+      grad.addColorStop(0, '#5865F2');
+      grad.addColorStop(1, '#0284C7');
+      ctx.fillStyle = grad;
+      ctx.fillRect(avatarCenterX - avatarRadius, avatarCenterY - avatarRadius, avatarRadius * 2, avatarRadius * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 44px Fredoka, Cairo, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText((playerName || 'P').slice(0, 2).toUpperCase(), avatarCenterX, avatarCenterY);
+    }
+    ctx.restore();
+
+    ctx.fillStyle = '#F8FAFC';
+    ctx.font = 'bold 16px "Plus Jakarta Sans", Cairo, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText((playerName || 'Player').slice(0, 14), avatarCenterX, avatarCenterY + avatarRadius + 24);
+
+    const tileGap = 4;
+    const tileSize = Math.min(28, Math.floor((180 - (maxAttempts - 1) * tileGap) / maxAttempts));
+    const gridW = wordLength * tileSize + (wordLength - 1) * tileGap;
+    const gridH = maxAttempts * tileSize + (maxAttempts - 1) * tileGap;
+    const gridStartX = boxX + 230 + Math.floor((190 - gridW) / 2);
+    const gridStartY = boxY + Math.floor((boxH - gridH) / 2);
+
+    for (let r = 0; r < maxAttempts; r++) {
+      const rowGuess = guesses[r];
+      for (let c = 0; c < wordLength; c++) {
+        const colIndex = lang === 'ar' ? (wordLength - 1 - c) : c;
+        const x = gridStartX + colIndex * (tileSize + tileGap);
+        const y = gridStartY + r * (tileSize + tileGap);
+
+        roundRect(ctx, x, y, tileSize, tileSize, 5);
+        if (!rowGuess) {
+          ctx.fillStyle = '#23252A';
+          ctx.fill();
+        } else {
+          const st = rowGuess.evaluations[c]?.state;
+          ctx.fillStyle = st === 'correct' ? '#538D4E' : (st === 'present' ? '#B59F3B' : '#3A3A3C');
+          ctx.fill();
+        }
+      }
+    }
+
+    const scoreText = solved ? `${guesses.length}/${maxAttempts}` : `X/${maxAttempts}`;
+    const crown = solved && guesses.length <= 4 ? '👑 ' : '';
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '600 14px "Plus Jakarta Sans", Cairo, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${crown}Score: ${scoreText} • ${lang === 'ar' ? 'عربي' : 'English'}`, canvas.width / 2, boxY + boxH + 28);
+
+    return canvas.toDataURL('image/png');
+  }
+
+  async function displayDiscordCardPreview() {
+    const loadingEl = document.getElementById('discordCardLoading');
+    const imgEl = document.getElementById('discordCardImg');
+    if (loadingEl) loadingEl.style.display = 'block';
+
+    const guesses = state.soloSession?.guesses || [];
+    const myStatus = state.soloSession?.status;
+    const solved = myStatus === 'WON';
+    const pName = nameInput.value.trim() || 'Player';
+
+    // Resolve avatar via proxy for canvas
+    const rawAvatarUrl = localStorage.getItem('wordchill_discord_avatar') || '';
+    const proxiedAvatar = await fetchAvatarViaProxy(rawAvatarUrl);
+
+    const dataUrl = await generateDiscordResultCard({
+      guesses,
+      wordLength: state.wordLength,
+      maxAttempts: state.maxAttempts,
+      lang: state.lang,
+      playerName: pName,
+      dayNumber: state.soloSession?.dayNumber || (dailyInfo ? dailyInfo.dayNumber : null),
+      isDaily: Boolean(state.soloSession?.isDaily || state.soloSession?.dayNumber),
+      solved,
+      avatarUrl: proxiedAvatar
+    });
+
+    state.lastCardDataUrl = dataUrl;
+    if (imgEl) {
+      imgEl.src = dataUrl;
+      imgEl.classList.remove('hidden');
+    }
+    if (loadingEl) loadingEl.style.display = 'none';
+
+    const webhook = localStorage.getItem('wordchill_discord_webhook');
+    if (webhook) {
+      shareResultToDiscord({ autoSend: true });
+    }
+  }
+
+  async function displayMpDiscordCardPreview(room) {
+    const myPlayer = room.players.find(p => p.id === playerId);
+    const guesses = myPlayer?.guesses || [];
+    const solved = myPlayer?.status === 'SOLVED';
+    const pName = nameInput.value.trim() || 'Player';
+
+    // Resolve avatar via proxy for canvas
+    const rawAvatarUrl = localStorage.getItem('wordchill_discord_avatar') || '';
+    const proxiedAvatar = await fetchAvatarViaProxy(rawAvatarUrl);
+
+    const dataUrl = await generateDiscordResultCard({
+      guesses,
+      wordLength: room.wordLength,
+      maxAttempts: room.maxAttempts,
+      lang: room.lang,
+      playerName: pName,
+      dayNumber: dailyInfo ? dailyInfo.dayNumber : null,
+      isDaily: false,
+      solved,
+      avatarUrl: proxiedAvatar
+    });
+
+    state.lastCardDataUrl = dataUrl;
+    const imgEl = document.getElementById('mpDiscordCardImg');
+    if (imgEl) {
+      imgEl.src = dataUrl;
+      imgEl.classList.remove('hidden');
+    }
+  }
+
+  async function shareResultToDiscord({ autoSend = false } = {}) {
+    const isSolo = state.mode === 'SOLO';
+    const guesses = isSolo
+      ? state.soloSession?.guesses || []
+      : state.room?.players.find(p => p.id === playerId)?.guesses || [];
+    const myStatus = isSolo
+      ? state.soloSession?.status
+      : state.room?.players.find(p => p.id === playerId)?.status;
+    const solved = myStatus === 'WON' || myStatus === 'SOLVED';
+    const pName = nameInput.value.trim() || 'Player';
+
+    const webhookUrl = localStorage.getItem('wordchill_discord_webhook') || '';
+    if (!webhookUrl && !autoSend) {
+      document.getElementById('discordModal')?.classList.remove('hidden');
+      return showToast('الرجاء وضع رابط Discord Webhook أولاً من الإعدادات!');
+    }
+    if (!webhookUrl && autoSend) return;
+
+    try {
+      showToast('جاري إرسال الكارت إلى ديسكورد... 🚀');
+      const gameUrl = state.lastChallengeToken
+        ? `${window.location.origin}${window.location.pathname}?challenge=${state.lastChallengeToken}`
+        : (state.soloSession?.isDaily ? `${window.location.origin}${window.location.pathname}?daily=1` : window.location.origin);
+
+      const res = await fetch('/api/discord/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webhookUrl,
+          playerName: pName,
+          avatarUrl: localStorage.getItem('wordchill_discord_avatar') || '',
+          lang: state.lang,
+          attemptsUsed: guesses.length,
+          maxAttempts: state.maxAttempts,
+          solved,
+          imageBase64: state.lastCardDataUrl,
+          gameUrl,
+          dayNumber: state.soloSession?.dayNumber || (dailyInfo ? dailyInfo.dayNumber : null),
+          isDaily: Boolean(state.soloSession?.isDaily || state.soloSession?.dayNumber),
+          challengeInfo: state.soloSession?.challenger || null,
+          wordLength: state.wordLength,
+          discordUserId: getEffectiveUserId()
+        })
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        showToast('تم نشر النتيجة في روم ديسكورد بنجاح! 🎮🔥');
+      } else {
+        showToast(data.error || 'تعذر الإرسال لديسكورد');
+      }
+    } catch (err) {
+      showToast('خطأ في الاتصال أثناء الإرسال');
+    }
+  }
+
+  async function createAndCopyChallengeLink() {
+    const isSolo = state.mode === 'SOLO';
+    if (!isSolo || !state.soloSession) return;
+    const pName = nameInput.value.trim() || 'Player';
+    const secretWord = state.soloSession.secretWord;
+    if (!secretWord) return;
+
+    try {
+      const res = await fetch('/api/challenge/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secretWord,
+          lang: state.lang,
+          wordLength: state.wordLength,
+          maxAttempts: state.maxAttempts,
+          challengerName: pName,
+          challengerScore: state.soloSession.guesses.length,
+          dayNumber: state.soloSession.dayNumber || null
+        })
+      });
+      const data = await res.json();
+      if (data.ok && data.shareUrl) {
+        state.lastChallengeToken = data.challengeToken;
+        const fullLink = `${window.location.origin}${window.location.pathname}${data.shareUrl}`;
+        await navigator.clipboard.writeText(fullLink);
+        showToast('تم نسخ رابط التحدي! ابعته لأصحابك في شات ديسكورد ⚔️');
+      }
+    } catch (e) {
+      showToast('تعذر إنشاء رابط التحدي');
+    }
+  }
+
+  async function copyEmojiGrid() {
+    const guesses = state.mode === 'SOLO'
+      ? state.soloSession?.guesses || []
+      : state.room?.players.find(p => p.id === playerId)?.guesses || [];
+    const myStatus = state.mode === 'SOLO'
+      ? state.soloSession?.status
+      : state.room?.players.find(p => p.id === playerId)?.status;
+    const solved = myStatus === 'WON' || myStatus === 'SOLVED';
+    const scoreText = solved ? `${guesses.length}/${state.maxAttempts}` : `X/${state.maxAttempts}`;
+    const crown = solved && guesses.length <= 4 ? '👑 ' : '';
+    const dayLabel = state.soloSession?.dayNumber ? `No. ${state.soloSession.dayNumber}` : 'Challenge';
+
+    const isAr = state.lang === 'ar';
+    const rows = guesses.map(g => {
+      const cells = g.evaluations.map(c => {
+        if (c.state === 'correct') return '🟩';
+        if (c.state === 'present') return '🟨';
+        return '⬛';
+      });
+      if (isAr) cells.reverse();
+      return cells.join('');
+    }).join('\n');
+
+    const shareUrl = window.location.origin;
+    const textToCopy = `WordChill ${dayLabel} ${crown}${scoreText}\n\n${rows}\n\n🎮 Play: ${shareUrl}`;
+
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      showToast('تم نسخ شبكة الإيموجي للمحادثة! 📋');
+    } catch (e) {
+      showToast('تعذر النسخ إلى الحافظة');
+    }
+  }
+
+  // ==================== DISCORD MODAL & BUTTON LISTENERS ====================
+  const discordModal = document.getElementById('discordModal');
+  const webhookInput = document.getElementById('discordWebhookInput');
+  const avatarInput = document.getElementById('discordAvatarInput');
+
+  if (webhookInput) webhookInput.value = localStorage.getItem('wordchill_discord_webhook') || '';
+  if (avatarInput) avatarInput.value = localStorage.getItem('wordchill_discord_avatar') || '';
+
+  document.getElementById('discordConfigBtn')?.addEventListener('click', () => {
+    discordModal?.classList.remove('hidden');
+  });
+  document.getElementById('closeDiscordModalBtn')?.addEventListener('click', () => {
+    discordModal?.classList.add('hidden');
+  });
+  document.getElementById('saveDiscordConfigBtn')?.addEventListener('click', () => {
+    const wVal = webhookInput?.value.trim() || '';
+    const aVal = avatarInput?.value.trim() || '';
+    localStorage.setItem('wordchill_discord_webhook', wVal);
+    localStorage.setItem('wordchill_discord_avatar', aVal);
+    updateAvatarDisplay(aVal);
+    discordModal?.classList.add('hidden');
+    showToast('تم حفظ إعدادات ديسكورد بنجاح! 🎮');
+  });
+
+  document.getElementById('sendToDiscordBtn')?.addEventListener('click', () => shareResultToDiscord());
+  document.getElementById('sendMpToDiscordBtn')?.addEventListener('click', () => shareResultToDiscord());
+  document.getElementById('copyChallengeLinkBtn')?.addEventListener('click', createAndCopyChallengeLink);
+  document.getElementById('copyEmojiGridBtn')?.addEventListener('click', copyEmojiGrid);
+
+  // ==================== URL PARAMETER PARSER ON STARTUP ====================
+  async function handleUrlParameters() {
+    const params = new URLSearchParams(window.location.search);
+
+    const challengeParam = params.get('challenge');
+    if (challengeParam) {
+      await startSoloGame({ challenge: challengeParam });
+      return;
+    }
+
+    if (params.get('daily') === '1' || params.get('mode') === 'daily') {
+      await startSoloGame({ isDaily: true });
+      return;
+    }
+
+    const roomParam = params.get('room') || params.get('code');
+    if (roomParam) {
+      document.getElementById('joinCodeInput').value = roomParam.toUpperCase();
+      joinRoomByCode(roomParam);
+    }
+  }
+
+  initDiscordSdk();
+  fetchDailyInfo().then(() => updateDailyButtonState());
+  handleUrlParameters();
+  fetchPublicRooms();
 })();

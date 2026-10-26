@@ -6,9 +6,10 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test tests/game.test.js"
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
