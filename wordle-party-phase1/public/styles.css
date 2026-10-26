@@ -76,8 +76,18 @@ html[data-theme="dark"] {
   --shadow-card: 0 24px 50px -15px rgba(2, 6, 23, 0.65);
 }
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+body, html {
+  width: 100%;
+  overflow-x: hidden;
   margin: 0;
   padding: 0;
 }
@@ -87,9 +97,11 @@ body {
   color: var(--text-main);
   font-family: var(--font-body);
   min-height: 100vh;
-  overflow-x: hidden;
+  min-height: 100dvh;
   position: relative;
   transition: background-color 0.3s ease, color 0.3s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* الخلفية الزرقاء المنحنية في النصف العلوي */
@@ -222,17 +234,30 @@ body {
   position: relative;
   z-index: 5;
   max-width: 1120px;
+  width: 100%;
   margin: 0 auto;
   padding: 10px 20px 50px;
+  min-height: calc(100vh - 80px);
+  min-height: calc(100dvh - 80px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .screen {
   display: none;
+  width: 100%;
+  max-width: 100%;
   animation: fadeUp 0.28s ease;
+  box-sizing: border-box;
 }
 
 .screen.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 @keyframes fadeUp {
@@ -292,9 +317,10 @@ body {
 /* ==================== CARDS & LAYOUT ==================== */
 .menu-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   gap: 24px;
   align-items: stretch;
+  width: 100%;
 }
 
 .surface-card {
@@ -304,11 +330,15 @@ body {
   box-shadow: var(--shadow-card);
   border: 1.5px solid var(--border-soft);
   transition: background-color 0.3s ease, border-color 0.3s ease;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .narrow-card {
+  width: 100%;
   max-width: 560px;
   margin: 12px auto;
+  box-sizing: border-box;
 }
 
 .card-pill-badge {
@@ -741,11 +771,13 @@ body {
   grid-template-columns: 1fr 310px;
   gap: 22px;
   align-items: start;
+  width: 100%;
 }
 
 .game-layout.solo-only {
   grid-template-columns: 1fr;
   max-width: 680px;
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -753,21 +785,32 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   padding: 26px 20px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .word-grid {
   --word-length: 5;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 10px;
   margin-bottom: 24px;
+  width: 100%;
+  max-width: min(100%, 420px);
 }
 
 .grid-row {
   display: grid;
-  grid-template-columns: repeat(var(--word-length), minmax(50px, 62px));
-  gap: 10px;
+  grid-template-columns: repeat(var(--word-length), minmax(0, 1fr));
+  gap: 8px;
   justify-content: center;
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
 }
 
 .word-grid.rtl-grid .grid-row,
@@ -895,34 +938,48 @@ body {
 /* ==================== KEYBOARD (SOFT SQUIRCLE KEYS) ==================== */
 .keyboard {
   width: 100%;
-  max-width: 580px;
+  max-width: min(100%, 540px);
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 0 4px;
+  box-sizing: border-box;
 }
 
 .keyboard.ar-keyboard {
-  max-width: 630px;
+  max-width: min(100%, 580px);
 }
 
 .kb-row {
   display: flex;
   justify-content: center;
+  align-items: center;
+  width: 100%;
   gap: 6px;
+  margin: 0 auto;
 }
 
 .kb-key {
-  flex: 1;
-  min-height: 50px;
-  border-radius: 15px;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 50px;
+  padding: 0 2px;
+  border-radius: 14px;
   border: none;
   background: var(--kb-bg);
   color: var(--kb-text);
   font-family: var(--font-display);
-  font-size: 1rem;
+  font-size: clamp(0.85rem, 3.4vw, 1rem);
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 4px 0 var(--kb-shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+  box-sizing: border-box;
   transition: transform 0.1s ease, background-color 0.2s ease;
 }
 
@@ -932,8 +989,9 @@ body {
 }
 
 .kb-key.wide {
-  flex: 1.5;
-  font-size: 0.85rem;
+  flex: 1.5 1 0;
+  font-size: clamp(0.7rem, 2.6vw, 0.85rem);
+  padding: 0 4px;
 }
 
 .kb-key.correct {
@@ -1375,40 +1433,189 @@ html, body {
 
 @media (max-width: 640px) {
   .topbar {
-    padding: 12px 16px;
+    padding: 10px 14px;
+    gap: 8px;
+  }
+  .tilted-logo {
+    gap: 2px;
+  }
+  .logo-tile {
+    width: 25px;
+    height: 29px;
+    font-size: 0.82rem;
+    border-radius: 7px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+  }
+  .topbar-actions {
+    gap: 6px;
+  }
+  .profile-pill {
+    padding: 4px 8px;
+    gap: 6px;
+  }
+  .profile-pill input {
+    width: 70px;
+    font-size: 0.8rem;
+  }
+  .icon-circle-btn,
+  .circle-back-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 0.95rem;
+    border-radius: 11px;
+  }
+  .app-shell {
+    padding: 8px 12px 35px;
+  }
+  .hero-word-tiles {
+    gap: 6px;
+  }
+  .w-tile {
+    width: 40px;
+    height: 46px;
+    font-size: 1.25rem;
+    border-radius: 12px;
+  }
+  .menu-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .surface-card {
+    padding: 20px 14px;
+    border-radius: 24px;
   }
   .daily-hero-banner {
     flex-direction: column;
     align-items: stretch;
-    padding: 18px;
+    padding: 16px 14px;
+    gap: 14px;
   }
   .daily-banner-actions {
     align-items: stretch;
-    margin-top: 10px;
+    margin-top: 6px;
+    width: 100%;
   }
   .btn-lg-daily {
     width: 100%;
+    justify-content: center;
   }
   .share-secondary-row {
     flex-direction: column;
   }
+  .board-area {
+    padding: 14px 6px;
+  }
   .word-grid {
     gap: 6px;
-    padding: 8px 4px;
+    margin-bottom: 16px;
+    max-width: min(100%, 350px);
   }
-  .letter-tile {
-    font-size: 1.4rem;
+  .grid-row {
+    gap: 6px;
+    max-width: min(100%, 350px);
+  }
+  .grid-tile {
+    font-size: clamp(1.1rem, 5vw, 1.5rem);
+    border-radius: 12px;
+    box-shadow: 0 3px 0 var(--tile-empty-border);
   }
   .keyboard {
-    padding: 6px 2px;
+    padding: 4px 1px;
     gap: 5px;
+    max-width: 100%;
+  }
+  .kb-row {
+    gap: 4px;
   }
   .kb-key {
-    height: 48px;
-    font-size: 0.95rem;
+    height: 46px;
+    font-size: clamp(0.78rem, 3.2vw, 0.95rem);
+    border-radius: 9px;
+    box-shadow: 0 3px 0 var(--kb-shadow);
   }
   .kb-key.wide {
-    font-size: 0.8rem;
+    flex: 1.35 1 0;
+    font-size: clamp(0.65rem, 2.4vw, 0.78rem);
+    padding: 0 4px;
+  }
+  .keyboard.ar-keyboard .kb-row {
+    gap: 3px;
+  }
+  .keyboard.ar-keyboard .kb-key {
+    height: 44px;
+    font-size: clamp(0.72rem, 3vw, 0.9rem);
+    border-radius: 7px;
+  }
+  .keyboard.ar-keyboard .kb-key.wide {
+    flex: 1.25 1 0;
+    font-size: clamp(0.6rem, 2.2vw, 0.75rem);
+  }
+  .length-selector-box {
+    padding: 10px 12px;
+  }
+  .pill {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+  }
+  .sketch-play-btn {
+    min-width: 140px;
+    height: 56px;
+    font-size: 0.98rem;
+    padding: 0 20px;
+  }
+}
+
+@media (max-width: 380px) {
+  .app-shell {
+    padding: 6px 6px 30px;
+  }
+  .surface-card {
+    padding: 16px 10px;
+  }
+  .logo-tile {
+    width: 20px;
+    height: 24px;
+    font-size: 0.7rem;
+    border-radius: 5px;
+  }
+  .profile-pill input {
+    width: 50px;
+    font-size: 0.75rem;
+  }
+  .icon-circle-btn,
+  .circle-back-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 0.85rem;
+  }
+  .w-tile {
+    width: 34px;
+    height: 40px;
+    font-size: 1.1rem;
+    border-radius: 10px;
+  }
+  .grid-row {
+    gap: 4px;
+  }
+  .grid-tile {
+    border-radius: 9px;
+    font-size: 1.15rem;
+  }
+  .kb-row {
+    gap: 2.5px;
+  }
+  .kb-key {
+    height: 42px;
+    font-size: 0.75rem;
+    border-radius: 6px;
+  }
+  .keyboard.ar-keyboard .kb-row {
+    gap: 2px;
+  }
+  .keyboard.ar-keyboard .kb-key {
+    height: 40px;
+    font-size: 0.68rem;
+    border-radius: 6px;
   }
 }
 
