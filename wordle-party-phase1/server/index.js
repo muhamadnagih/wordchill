@@ -19,8 +19,24 @@ const app = express();
 const roomManager = new RoomManager();
 const SECRET_KEY = process.env.SESSION_SECRET || 'wordchill-vercel-secret-key-2026';
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Discord Activity Proxy middleware: strip /.proxy prefix if present
+app.use((req, res, next) => {
+  if (req.url.startsWith('/.proxy/')) {
+    req.url = req.url.slice(8);
+  } else if (req.url === '/.proxy') {
+    req.url = '/';
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // In-memory scoreboards for daily & challenge sharing (Serverless friendly cache)
@@ -291,7 +307,7 @@ const { registerDiscordCommands } = require('../scripts/register-commands');
 
 const handleTokenExchange = async (req, res) => {
   try {
-    const { code } = req.body || {};
+    const { code, redirect_uri } = req.body || {};
     if (!code) return res.status(400).json({ ok: false, error: 'Authorization code is required' });
 
     const clientId = process.env.DISCORD_CLIENT_ID || '1562771601764651109';
@@ -310,15 +326,21 @@ const handleTokenExchange = async (req, res) => {
       });
     }
 
+    const tokenParams = {
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'authorization_code',
+      code
+    };
+    const effectiveRedirectUri = redirect_uri || process.env.DISCORD_REDIRECT_URI;
+    if (effectiveRedirectUri) {
+      tokenParams.redirect_uri = effectiveRedirectUri;
+    }
+
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: 'authorization_code',
-        code
-      })
+      body: new URLSearchParams(tokenParams)
     });
 
     const tokenData = await tokenRes.json();
@@ -326,7 +348,27 @@ const handleTokenExchange = async (req, res) => {
       return res.status(400).json({ ok: false, error: tokenData.error_description || 'Discord OAuth failed' });
     }
 
-    res.json({ ok: true, access_token: tokenData.access_token });
+    // Fetch user profile from Discord API
+    let user = null;
+    try {
+      const userRes = await fetch('https://discord.com/api/v10/users/@me', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+      if (userRes.ok) {
+        user = await userRes.json();
+      }
+    } catch (e) {
+      console.warn('Failed to fetch user profile:', e.message);
+    }
+
+    res.json({
+      ok: true,
+      access_token: tokenData.access_token,
+      token_type: tokenData.token_type,
+      expires_in: tokenData.expires_in,
+      scope: tokenData.scope,
+      user
+    });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -337,19 +379,22 @@ app.post('/api/discord/token', handleTokenExchange);
 
 // ==================== DISCORD INTERACTIONS (SLASH COMMANDS & PING) ====================
 function verifyDiscordSignature(req) {
-  const publicKey = process.env.DISCORD_PUBLIC_KEY;
-  if (!publicKey) return true; // dev bypass if not configured
+  const publicKey = (process.env.DISCORD_PUBLIC_KEY || '').trim();
+  if (!publicKey) return false; // Security requirement: Discord verification fails if public key is not configured
   const signature = req.headers['x-signature-ed25519'];
   const timestamp = req.headers['x-signature-timestamp'];
   if (!signature || !timestamp) return false;
   try {
-    const rawBody = req.rawBody || JSON.stringify(req.body);
-    const message = Buffer.concat([Buffer.from(timestamp, 'utf-8'), Buffer.from(rawBody, 'utf-8')]);
-    const key = Buffer.concat([
+    const rawBodyBuf = Buffer.isBuffer(req.rawBody)
+      ? req.rawBody
+      : Buffer.from(req.rawBody || JSON.stringify(req.body || {}), 'utf-8');
+    const message = Buffer.concat([Buffer.from(timestamp, 'utf-8'), rawBodyBuf]);
+    const derKey = Buffer.concat([
       Buffer.from('302a300506032b6570032100', 'hex'),
       Buffer.from(publicKey, 'hex')
     ]);
-    return crypto.verify(null, message, { key, format: 'der', type: 'spki' }, Buffer.from(signature, 'hex'));
+    const keyObj = crypto.createPublicKey({ key: derKey, format: 'der', type: 'spki' });
+    return crypto.verify(null, message, keyObj, Buffer.from(signature, 'hex'));
   } catch (e) {
     return false;
   }
@@ -452,7 +497,12 @@ function isAllowedAvatarDomain(urlStr) {
                       host.endsWith('discordapp.net') ||
                       host.endsWith('discord.media') ||
                       host.endsWith('discord.gg');
-    return isDiscord || host.endsWith('githubusercontent.com') || host.endsWith('imgur.com');
+    return isDiscord ||
+      host.endsWith('githubusercontent.com') ||
+      host.endsWith('imgur.com') ||
+      host.endsWith('googleusercontent.com') ||
+      host.endsWith('ui-avatars.com') ||
+      host.endsWith('gravatar.com');
   } catch (e) {
     return false;
   }
@@ -485,7 +535,7 @@ async function resolveAvatarDataUri({ avatarUrl, userId, avatarHash, playerName,
   else if (userId && avatarHash) {
     targetCdnUrl = `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.png?size=256`;
   }
-  // b) Only userId provided -> query Discord REST API using Bot Token
+  // b) Only userId provided -> query Discord REST API using Bot Token, or fallback to snowflake default
   else if (userId && process.env.DISCORD_BOT_TOKEN) {
     try {
       const uRes = await fetch(`https://discord.com/api/v10/users/${userId}`, {
@@ -503,6 +553,14 @@ async function resolveAvatarDataUri({ avatarUrl, userId, avatarHash, playerName,
     } catch (e) {
       console.warn('Discord Bot API user lookup note:', e.message);
     }
+  }
+
+  // b2) If targetCdnUrl still not resolved, but userId is a valid numeric Discord ID, compute default Discord avatar
+  if (!targetCdnUrl && userId && /^\d{15,22}$/.test(userId)) {
+    try {
+      const defaultAvatarNum = (BigInt(userId) >> 22n) % 6n;
+      targetCdnUrl = `https://cdn.discordapp.com/embed/avatars/${defaultAvatarNum}.png`;
+    } catch (e) {}
   }
 
   // c) CRITICAL FALLBACK: If userId missing/empty, but playerName is available
@@ -663,10 +721,6 @@ app.post('/api/discord/share', async (req, res) => {
       });
     }
 
-    if (dedupKey) {
-      dailySubmissions.set(dedupKey, true);
-    }
-
     const scoreText = solved ? `${attemptsUsed}/${maxAttempts}` : `X/${maxAttempts}`;
     const crown = solved && attemptsUsed <= 4 ? '👑 ' : '';
     const speed = solved && attemptsUsed <= 3 ? '⚡ ' : '';
@@ -785,13 +839,14 @@ app.post('/api/discord/share', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'تعذر الإرسال إلى ديسكورد', detail: errText });
     }
 
-    // Mark successful submission in dedup cache
+    // Mark successful submission in dedup cache (ONLY on verified Discord success)
     if (dedupKey) {
       dailySubmissions.set(dedupKey, true);
     }
 
     res.json({ ok: true, leaderboard: list });
   } catch (err) {
+    if (dedupKey) dailySubmissions.delete(dedupKey);
     res.status(500).json({ ok: false, error: err.message });
   }
 });

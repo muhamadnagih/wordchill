@@ -110,13 +110,15 @@ body {
   top: 0;
   left: 0;
   width: 100%;
+  max-width: 100vw;
   height: 440px;
   background: var(--hero-curve-bg);
-  border-bottom-left-radius: 50% 90px;
-  border-bottom-right-radius: 50% 90px;
+  border-bottom-left-radius: clamp(32px, 8vw, 64px);
+  border-bottom-right-radius: clamp(32px, 8vw, 64px);
   z-index: 0;
   box-shadow: 0 12px 35px rgba(14, 165, 233, 0.2);
   pointer-events: none;
+  overflow: hidden;
   transition: background 0.35s ease;
 }
 
@@ -242,6 +244,7 @@ body {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  overflow-x: clip;
 }
 
 .screen {
@@ -820,6 +823,7 @@ body {
 
 /* مربعات الحروف الدائرية الناعمة نفس الصورة */
 .grid-tile {
+  box-sizing: border-box;
   width: 100%;
   aspect-ratio: 1;
   border-radius: 18px;
@@ -948,7 +952,7 @@ body {
 }
 
 .keyboard.ar-keyboard {
-  max-width: min(100%, 580px);
+  max-width: min(100%, 560px);
 }
 
 .kb-row {
@@ -1432,6 +1436,11 @@ html, body {
 }
 
 @media (max-width: 640px) {
+  .curved-hero-bg {
+    height: 300px;
+    border-bottom-left-radius: 32px;
+    border-bottom-right-radius: 32px;
+  }
   .topbar {
     padding: 10px 14px;
     gap: 8px;

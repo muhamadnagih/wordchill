@@ -1,5 +1,14 @@
 (() => {
   
+  // Discord Activity proxy helper: all fetch() calls must go through /.proxy/ on *.discordsays.com
+  const IS_DISCORD_PROXY = window.location.hostname.endsWith('.discordsays.com') ||
+    new URLSearchParams(window.location.search).has('frame_id') ||
+    new URLSearchParams(window.location.search).has('instance_id');
+  const API_BASE = IS_DISCORD_PROXY ? '/.proxy' : '';
+  function apiUrl(path) {
+    return `${API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+  }
+
   // محاكي اتصال ذكي يعمل عبر HTTP ليتوافق مع Vercel Serverless بنسبة 100%
   let roomStateListener = null;
   const socket = {
@@ -9,12 +18,12 @@
     },
     async emit(event, payload, cb) {
       const map = {
-        'room:create': '/api/mp/create',
-        'room:join': '/api/mp/join',
-        'room:start': '/api/mp/start',
-        'room:guess': '/api/mp/guess',
-        'room:new-round': '/api/mp/new-round',
-        'room:leave': '/api/mp/leave'
+        'room:create': apiUrl('/api/mp/create'),
+        'room:join': apiUrl('/api/mp/join'),
+        'room:start': apiUrl('/api/mp/start'),
+        'room:guess': apiUrl('/api/mp/guess'),
+        'room:new-round': apiUrl('/api/mp/new-round'),
+        'room:leave': apiUrl('/api/mp/leave')
       };
       try {
         const res = await fetch(map[event], {
@@ -37,7 +46,7 @@
     const activeCode = localStorage.getItem('lexirush_active_room');
     if (!activeCode || !roomStateListener) return;
     try {
-      const res = await fetch(`/api/mp/state?code=${encodeURIComponent(activeCode)}&playerId=${encodeURIComponent(playerId)}`);
+      const res = await fetch(apiUrl(`/api/mp/state?code=${encodeURIComponent(activeCode)}&playerId=${encodeURIComponent(playerId)}`));
       const data = await res.json();
       if (data.ok && data.room) {
         roomStateListener(data.room);
@@ -371,7 +380,7 @@
         }
       }
 
-      const res = await fetch('/api/solo/start', {
+      const res = await fetch(apiUrl('/api/solo/start'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -977,7 +986,7 @@
 
     try {
       if (state.mode === 'SOLO') {
-        const res = await fetch('/api/solo/guess', {
+        const res = await fetch(apiUrl('/api/solo/guess'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1048,7 +1057,7 @@
 
   async function fetchPublicRooms() {
     try {
-      const res = await fetch('/api/rooms/public');
+      const res = await fetch(apiUrl('/api/rooms/public'));
       const data = await res.json();
       const container = document.getElementById('publicRoomsList');
       if (!data.rooms || data.rooms.length === 0) {
@@ -1122,8 +1131,12 @@
       if (dotEl) dotEl.style.background = '#F59E0B';
       if (titleEl) titleEl.textContent = 'Connecting to Discord Activity... ⏳';
 
-      const sdkModule = await import('https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@2.5.0/output/index.mjs')
+      let sdkModule = await import('https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@2.5.0/output/index.mjs')
         .catch(() => null);
+      if (!sdkModule) {
+        sdkModule = await import('https://unpkg.com/@discord/embedded-app-sdk@2.5.0/output/index.mjs')
+          .catch(() => null);
+      }
 
       if (sdkModule) {
         const clientId = '1562771601764651109';
@@ -1154,23 +1167,24 @@
 
         if (code) {
           // Supports both /api/token and /api/discord/token routes
-          let tokenRes = await fetch('/api/token', {
+          let tokenRes = await fetch(apiUrl('/api/token'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ code })
           }).catch(() => null);
 
           if (!tokenRes || !tokenRes.ok) {
-            tokenRes = await fetch('/api/discord/token', {
+            tokenRes = await fetch(apiUrl('/api/discord/token'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ code })
             }).catch(() => null);
           }
 
+          let tokenData = null;
           if (tokenRes && tokenRes.ok) {
-            const tokenData = await tokenRes.json();
-            if (tokenData.ok && tokenData.access_token) {
+            tokenData = await tokenRes.json().catch(() => null);
+            if (tokenData && tokenData.access_token) {
               discordAuth = await discordSdk.commands.authenticate({
                 access_token: tokenData.access_token
               }).catch((err) => {
@@ -1179,22 +1193,23 @@
               });
             }
           }
-        }
 
-        // 4. Update player profile from authenticated user
-        if (discordAuth?.user) {
-          const u = discordAuth.user;
-          const dName = u.global_name || u.username;
-          playerId = 'discord_' + u.id;
-          localStorage.setItem('lexirush_player_id', playerId);
-          nameInput.value = dName;
-          localStorage.setItem('lexirush_player_name', dName);
+          // 4. Update player profile from authenticated user or backend exchange
+          const authedUser = discordAuth?.user || tokenData?.user;
+          if (authedUser) {
+            const u = authedUser;
+            const dName = u.global_name || u.username;
+            playerId = 'discord_' + u.id;
+            localStorage.setItem('lexirush_player_id', playerId);
+            nameInput.value = dName;
+            localStorage.setItem('lexirush_player_name', dName);
 
-          const avatarUrl = u.avatar
-            ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=256`
-            : `https://cdn.discordapp.com/embed/avatars/${(BigInt(u.id || 0) >> 22n) % 6n}.png`;
-          localStorage.setItem('wordchill_discord_avatar', avatarUrl);
-          updateAvatarDisplay(avatarUrl);
+            const avatarUrl = u.avatar
+              ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=256`
+              : `https://cdn.discordapp.com/embed/avatars/${(BigInt(u.id || 0) >> 22n) % 6n}.png`;
+            localStorage.setItem('wordchill_discord_avatar', avatarUrl);
+            updateAvatarDisplay(avatarUrl);
+          }
         }
 
         if (dotEl) dotEl.style.background = '#10B981';
@@ -1213,7 +1228,7 @@
   // ==================== DAILY SEED & COUNTDOWN ====================
   async function fetchDailyInfo() {
     try {
-      const res = await fetch('/api/daily/info');
+      const res = await fetch(apiUrl('/api/daily/info'));
       const data = await res.json();
       if (data.ok) {
         dailyInfo = data;
@@ -1255,7 +1270,6 @@
   });
 
   // ==================== CANVAS RESULT CARD GENERATOR ====================
-  // Resolve avatar via backend endpoint (/api/discord-avatar) supporting Bot API & CDN
   async function resolveDiscordAvatar({ avatarUrl, userId, playerName, guildId } = {}) {
     if (avatarUrl && avatarUrl.startsWith('data:')) return avatarUrl;
 
@@ -1269,7 +1283,7 @@
       if (playerName) q.set('playerName', playerName);
       if (guildId) q.set('guildId', guildId);
 
-      const res = await fetch(`/api/discord-avatar?${q.toString()}`);
+      const res = await fetch(apiUrl(`/api/discord-avatar?${q.toString()}`));
       const data = await res.json();
       if (data.ok && data.dataUri) {
         state.cachedAvatarDataUri = data.dataUri;
@@ -1277,6 +1291,10 @@
       }
     } catch (e) {
       console.warn('Avatar resolution note:', e);
+    }
+    // Phase 3 fallback: return avatarUrl directly if proxy could not convert
+    if (avatarUrl) {
+      return avatarUrl;
     }
     return state.cachedAvatarDataUri || null;
   }
@@ -1295,7 +1313,17 @@
         img.crossOrigin = 'anonymous';
       }
       img.onload = () => resolve(img);
-      img.onerror = () => resolve(null);
+      img.onerror = () => {
+        // Retry without crossOrigin if CORS was rejected
+        if (img.crossOrigin) {
+          const fallbackImg = new Image();
+          fallbackImg.onload = () => resolve(fallbackImg);
+          fallbackImg.onerror = () => resolve(null);
+          fallbackImg.src = url;
+        } else {
+          resolve(null);
+        }
+      };
       img.src = url;
     });
   }
@@ -1404,7 +1432,12 @@
     ctx.textAlign = 'center';
     ctx.fillText(`${crown}Score: ${scoreText} • ${lang === 'ar' ? 'عربي' : 'English'}`, canvas.width / 2, boxY + boxH + 28);
 
-    return canvas.toDataURL('image/png');
+    try {
+      return canvas.toDataURL('image/png');
+    } catch (e) {
+      console.warn('Canvas toDataURL export note:', e);
+      return null;
+    }
   }
 
   async function displayDiscordCardPreview() {
@@ -1532,7 +1565,7 @@
         ? `${window.location.origin}${window.location.pathname}?challenge=${state.lastChallengeToken}`
         : (state.soloSession?.isDaily ? `${window.location.origin}${window.location.pathname}?daily=1` : window.location.origin);
 
-      const res = await fetch('/api/discord/share', {
+      const res = await fetch(apiUrl('/api/discord/share'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1577,7 +1610,7 @@
     if (!secretWord) return;
 
     try {
-      const res = await fetch('/api/challenge/create', {
+      const res = await fetch(apiUrl('/api/challenge/create'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
